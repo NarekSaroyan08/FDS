@@ -1,0 +1,29 @@
+{
+  "skill_name": "senior-developer",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Design a real-time event notification system in Python using FastAPI, PostgreSQL (async SQLAlchemy), and Redis. Implement a layered architecture, connection pool setup, index optimization strategy in PostgreSQL, structured logging, custom domain exceptions, and pytest integration tests with Redis/PostgreSQL mocked.",
+      "expected_output": "A clean, production-ready backend design and module implementing Clean Architecture layers. Contains type-annotated database setup, custom exceptions, async database calls, index recommendations, and automated tests with comprehensive fixture/mock structure.",
+      "expectations": [
+        "Uses Clean Architecture principles (clear separation of Domain, Application, and Infrastructure layers)",
+        "Uses async SQLAlchemy operations with connection pooling",
+        "Includes index recommendations (EXPLAIN plans) or database transaction boundaries",
+        "Implements domain-specific custom exceptions and structured logging",
+        "Includes pytest integration tests with appropriate mocking for DB and Redis"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Create a responsive, premium UI dashboard component in React with TypeScript. It should present server health metrics. Use custom HSL styling (no Tailwind), CSS variables, custom SVG micro-animations/transitions for charts, dynamic data simulation, responsive flexbox/grid layout, and include unit tests using React Testing Library.",
+      "expected_output": "A modern React component file with TypeScript interfaces, a separate styled CSS file with custom properties, smooth transitions, semantic HTML, proper SEO tags, and tests verifying component rendering and interaction.",
+      "expectations": [
+        "Uses React with TypeScript and types all component props and states",
+        "Implements premium custom HSL styling and animations via CSS variables",
+        "Ensures full responsive design (mobile/desktop media queries)",
+        "Uses semantic HTML tags and incorporates SEO best practices",
+        "Includes unit tests verifying rendering of health metrics"
+      ]
+    }
+  ]
+}

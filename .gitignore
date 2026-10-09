@@ -1,0 +1,9 @@
+# Бинарники и артефакты сборки
+build/
+*.o
+/facetracking
+/calibration
+
+# Кэш Python
+__pycache__/
+*.pyc
