@@ -31,6 +31,7 @@ if [ ! -f "data/haarcascade_frontalface_default.xml" ]; then
 fi
 
 touch data/calibration.txt
+touch data/fixed_to_servo.txt
 
 echo "Setup complete!"
 echo "Build:      make"

@@ -9,12 +9,14 @@
 #include <cmath>
 #include <fstream>
 #include <chrono>
+#include <string>
+#include <stdexcept>
 
 #define SERVO_X 17
 #define SERVO_Y 27
 
 #ifndef CALIBRATION_FILE
-#define CALIBRATION_FILE "data/calibration.txt"
+#define CALIBRATION_FILE "data/fixed_to_servo.txt"
 #endif
 #ifndef CASCADE_FILE
 #define CASCADE_FILE "data/haarcascade_frontalface_default.xml"
@@ -81,7 +83,7 @@ void loadLUT()
 
     if (!file.is_open())
     {
-        std::cout << "No calibration.txt found\n";
+        std::cout << "No fixed_to_servo.txt found\n";
         return;
     }
 
@@ -170,8 +172,34 @@ void getServoFromLUT(
 }
 
 // ==========================
-int main()
+int main(int argc, char *argv[])
 {
+    std::string fixedCameraDevice = "/dev/video0";
+    bool motorEnabled = false;
+    try
+    {
+        if (argc >= 2)
+        {
+            const std::string requestedDevice = argv[1];
+            if (!requestedDevice.empty() &&
+                std::all_of(requestedDevice.begin(), requestedDevice.end(),
+                            [](char c) { return c >= '0' && c <= '9'; }))
+                fixedCameraDevice = "/dev/video" + requestedDevice;
+            else
+                fixedCameraDevice = requestedDevice;
+        }
+        if (argc == 3)
+            motorEnabled = std::string(argv[2]) == "--enable-motor";
+        if (argc > 3 || fixedCameraDevice.empty() ||
+            (argc == 3 && !motorEnabled))
+            throw std::invalid_argument("arguments");
+    }
+    catch (const std::exception &)
+    {
+        std::cerr << "Usage: facetracking [fixed_camera_device] [--enable-motor]\n";
+        return 1;
+    }
+
     // ==========================
     // REDUCE OPENCV THREAD ISSUES
     cv::setNumThreads(1);
@@ -188,6 +216,8 @@ int main()
     // GPIO MODES
     gpioSetMode(MOTOR_IN1, PI_OUTPUT);
     gpioSetMode(MOTOR_IN2, PI_OUTPUT);
+    gpioWrite(MOTOR_IN1, 0);
+    gpioWrite(MOTOR_IN2, 0);
 
     // ==========================
     // SAFE PWM FREQUENCY
@@ -197,21 +227,29 @@ int main()
     // ==========================
     // LOAD LUT
     loadLUT();
+    if (LUT.empty())
+    {
+        std::cerr << "No fixed-to-servo calibration points. "
+                     "Run make calibrate first.\n";
+        gpioTerminate();
+        return 1;
+    }
 
     // ==========================
-    // CAMERA
-    cv::VideoCapture cap(0, cv::CAP_V4L2);
+    // Only the fixed camera supplies face positions. The moving camera
+    // is the pan/tilt payload and is not opened during tracking.
+    cv::VideoCapture cap;
+    if (!cap.open(fixedCameraDevice, cv::CAP_V4L2))
+    {
+        std::cerr << "Cannot open fixed camera: " << fixedCameraDevice << "\n";
+        gpioTerminate();
+        return 1;
+    }
 
     cap.set(cv::CAP_PROP_FRAME_WIDTH, 640);
     cap.set(cv::CAP_PROP_FRAME_HEIGHT, 480);
     cap.set(cv::CAP_PROP_FPS, 30);
     cap.set(cv::CAP_PROP_BUFFERSIZE, 1);
-
-    if (!cap.isOpened())
-    {
-        std::cout << "Camera failed\n";
-        return -1;
-    }
 
     // ==========================
     // FACE CASCADE
@@ -221,6 +259,7 @@ int main()
         CASCADE_FILE))
     {
         std::cout << "Cascade load failed\n";
+        gpioTerminate();
         return -1;
     }
 
@@ -246,6 +285,12 @@ int main()
             // SAFETY
             if (frame.empty())
                 continue;
+            if (frame.cols != 640 || frame.rows != 480)
+            {
+                std::cerr << "Fixed camera must deliver 640x480 frames\n";
+                running = false;
+                break;
+            }
 
             cv::Mat gray;
             cv::Mat small;
@@ -315,7 +360,7 @@ int main()
                 // MOTOR CONTROL
                 int errorY = fy - 240;
 
-                if (abs(errorY) < 30)
+                if (!motorEnabled || abs(errorY) < 30)
                 {
                     gpioWrite(MOTOR_IN1, 0);
                     gpioWrite(MOTOR_IN2, 0);

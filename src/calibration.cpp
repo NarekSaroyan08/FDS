@@ -5,17 +5,15 @@
 #include <vector>
 #include <fstream>
 #include <algorithm>
+#include <string>
+#include <stdexcept>
 
 #define SERVO_X 17
 #define SERVO_Y 27
 
 #ifndef CALIBRATION_FILE
-#define CALIBRATION_FILE "data/calibration.txt"
+#define CALIBRATION_FILE "data/fixed_to_servo.txt"
 #endif
-#ifndef CASCADE_FILE
-#define CASCADE_FILE "data/haarcascade_frontalface_default.xml"
-#endif
-
 // ==========================
 // CALIBRATION STRUCT
 struct CalibrationPoint
@@ -26,9 +24,51 @@ struct CalibrationPoint
 
 std::vector<CalibrationPoint> LUT;
 
-// ==========================
-int main()
+std::string cameraPath(const std::string &device)
 {
+    if (!device.empty() &&
+        std::all_of(device.begin(), device.end(),
+                    [](char c) { return c >= '0' && c <= '9'; }))
+        return "/dev/video" + device;
+    return device;
+}
+
+// ==========================
+int main(int argc, char *argv[])
+{
+    std::string fixedDevice = "/dev/video0";
+    std::string movingDevice = "/dev/video1";
+    int cornersX = 7;
+    int cornersY = 7;
+    try
+    {
+        if (argc == 5)
+        {
+            fixedDevice = cameraPath(argv[1]);
+            movingDevice = cameraPath(argv[2]);
+            cornersX = std::stoi(argv[3]);
+            cornersY = std::stoi(argv[4]);
+        }
+        else if (argc != 1)
+        {
+            throw std::invalid_argument("argument count");
+        }
+    }
+    catch (const std::exception &)
+    {
+        std::cerr << "Usage: calibration [fixed_camera_device moving_camera_device "
+                     "inner_corners_x inner_corners_y]\n";
+        return 1;
+    }
+    if (fixedDevice.empty() || movingDevice.empty() ||
+        fixedDevice == movingDevice || cornersX < 3 || cornersY < 3 ||
+        cornersX > 20 || cornersY > 20)
+    {
+        std::cerr << "Invalid camera devices or chessboard size\n";
+        return 1;
+    }
+    const cv::Size boardSize(cornersX, cornersY);
+
     // ==========================
     // FIX OPENCV THREAD ISSUES
     cv::setNumThreads(1);
@@ -66,29 +106,31 @@ int main()
 
     // ==========================
     // CAMERA
-    cv::VideoCapture cap(0, cv::CAP_V4L2);
+    cv::VideoCapture cap;
+    cv::VideoCapture movingCap;
+    if (!cap.open(fixedDevice, cv::CAP_V4L2))
+    {
+        std::cerr << "Cannot open fixed camera: " << fixedDevice << "\n";
+        gpioTerminate();
+        return 1;
+    }
+    if (!movingCap.open(movingDevice, cv::CAP_V4L2))
+    {
+        std::cerr << "Cannot open moving camera: " << movingDevice << "\n";
+        std::cerr << "Check /dev/video* and v4l2-ctl --list-devices. "
+                     "The second camera is not always /dev/video1.\n";
+        gpioTerminate();
+        return 1;
+    }
 
     cap.set(cv::CAP_PROP_FRAME_WIDTH, 640);
     cap.set(cv::CAP_PROP_FRAME_HEIGHT, 480);
     cap.set(cv::CAP_PROP_FPS, 30);
     cap.set(cv::CAP_PROP_BUFFERSIZE, 1);
-
-    if (!cap.isOpened())
-    {
-        std::cout << "Camera failed\n";
-        return -1;
-    }
-
-    // ==========================
-    // FACE CASCADE
-    cv::CascadeClassifier face_cascade;
-
-    if (!face_cascade.load(
-        CASCADE_FILE))
-    {
-        std::cout << "Cascade load failed\n";
-        return -1;
-    }
+    movingCap.set(cv::CAP_PROP_FRAME_WIDTH, 640);
+    movingCap.set(cv::CAP_PROP_FRAME_HEIGHT, 480);
+    movingCap.set(cv::CAP_PROP_FPS, 30);
+    movingCap.set(cv::CAP_PROP_BUFFERSIZE, 1);
 
     // ==========================
     // START POSITIONS
@@ -100,116 +142,160 @@ int main()
     gpioServo(SERVO_X, 1500);
     gpioServo(SERVO_Y, 1500);
 
-    std::cout << "\n=== CALIBRATION MODE ===\n";
+    std::cout << "\n=== FIXED CAMERA TO SERVO CALIBRATION ===\n";
+    std::cout << "Chessboard: " << cornersX << "x" << cornersY
+              << " inner corners\n";
     std::cout << "A/D -> X servo\n";
     std::cout << "W/S -> Y servo\n";
-    std::cout << "SPACE -> Save point\n";
-    std::cout << "P -> Append save calibration.txt\n";
+    std::cout << "Aim until the board is centered in the MOVING camera\n";
+    std::cout << "SPACE -> Record fixed-camera board position and servo angles\n";
+    std::cout << "P -> Save all points to fixed_to_servo.txt\n";
     std::cout << "C -> Clear all LUT points\n";
     std::cout << "Q -> Quit\n\n";
 
     // ==========================
-    // FACE STABILITY
+    // BOARD STABILITY
     int stableCount = 0;
-
-    cv::Rect lastFace;
+    int movingStableCount = 0;
+    cv::Point2f lastCenter(-1.0f, -1.0f);
+    cv::Point2f lastMovingCenter(-1.0f, -1.0f);
+    int failedReads = 0;
+    bool cameraError = false;
 
     while (true)
     {
         cv::Mat frame;
+        cv::Mat movingFrame;
 
-        if (!cap.read(frame))
+        if (!cap.grab() || !movingCap.grab() ||
+            !cap.retrieve(frame) || !movingCap.retrieve(movingFrame))
+        {
+            if (++failedReads >= 30)
+            {
+                std::cerr << "Camera frame read failed repeatedly\n";
+                cameraError = true;
+                break;
+            }
             continue;
+        }
 
-        if (frame.empty())
+        if (frame.empty() || movingFrame.empty())
             continue;
+        failedReads = 0;
+
+        if (frame.cols != 640 || frame.rows != 480)
+        {
+            std::cerr << "Fixed camera must deliver 640x480 frames\n";
+            cameraError = true;
+            break;
+        }
 
         // ==========================
-        // GRAY + SMALL
+        // GRAY
         cv::Mat gray;
-        cv::Mat small;
+        cv::Mat movingGray;
 
         cv::cvtColor(
             frame,
             gray,
             cv::COLOR_BGR2GRAY
         );
+        cv::cvtColor(movingFrame, movingGray, cv::COLOR_BGR2GRAY);
 
-        cv::resize(
-            gray,
-            small,
-            cv::Size(),
-            0.5,
-            0.5
+        std::vector<cv::Point2f> corners;
+        std::vector<cv::Point2f> movingCorners;
+        const bool found = cv::findChessboardCorners(
+            gray, boardSize, corners,
+            cv::CALIB_CB_ADAPTIVE_THRESH |
+            cv::CALIB_CB_NORMALIZE_IMAGE |
+            cv::CALIB_CB_FAST_CHECK
+        );
+        const bool movingFound = cv::findChessboardCorners(
+            movingGray, boardSize, movingCorners,
+            cv::CALIB_CB_ADAPTIVE_THRESH |
+            cv::CALIB_CB_NORMALIZE_IMAGE |
+            cv::CALIB_CB_FAST_CHECK
         );
 
-        // ==========================
-        // DETECT
-        std::vector<cv::Rect> faces;
-
-        face_cascade.detectMultiScale(
-            small,
-            faces,
-            1.2,
-            3
-        );
-
-        int fx = -1;
-        int fy = -1;
+        int px = -1;
+        int py = -1;
+        bool aimed = false;
 
         // ==========================
-        // FACE FOUND
-        if (faces.size() > 0)
+        // BOARD FOUND IN THE FIXED CAMERA
+        if (found)
         {
-            cv::Rect f = faces[0];
+            cv::cornerSubPix(
+                gray, corners, cv::Size(11, 11), cv::Size(-1, -1),
+                cv::TermCriteria(cv::TermCriteria::EPS |
+                                 cv::TermCriteria::COUNT, 30, 0.1)
+            );
+            cv::drawChessboardCorners(frame, boardSize, corners, true);
 
-            // STABILITY CHECK
-            if (
-                abs(f.x - lastFace.x) < 10 &&
-                abs(f.y - lastFace.y) < 10
-            )
+            cv::Point2f center(0.0f, 0.0f);
+            for (const auto &corner : corners)
             {
-                stableCount++;
+                center += corner;
             }
+            center *= 1.0f / static_cast<float>(corners.size());
+
+            if (lastCenter.x >= 0.0f &&
+                cv::norm(center - lastCenter) < 5.0)
+                ++stableCount;
             else
-            {
                 stableCount = 0;
-            }
+            lastCenter = center;
 
-            lastFace = f;
-
-            // ONLY STABLE FACE
-            if (stableCount > 3)
+            if (stableCount >= 3)
             {
-                fx =
-                    (f.x + f.width / 2) * 2;
-
-                fy =
-                    (f.y + f.height / 2) * 2;
-
-                // DRAW FACE POINT
-                cv::circle(
-                    frame,
-                    {fx, fy},
-                    5,
-                    {0,255,0},
-                    -1
-                );
-
-                // DRAW RECTANGLE
-                cv::rectangle(
-                    frame,
-                    cv::Rect(
-                        f.x * 2,
-                        f.y * 2,
-                        f.width * 2,
-                        f.height * 2
-                    ),
-                    {255,0,0},
-                    2
-                );
+                px = cvRound(center.x);
+                py = cvRound(center.y);
+                cv::circle(frame, {px, py}, 5, {0, 255, 0}, -1);
             }
         }
+        else
+        {
+            stableCount = 0;
+            lastCenter = {-1.0f, -1.0f};
+        }
+
+        if (movingFound)
+        {
+            cv::cornerSubPix(
+                movingGray, movingCorners, cv::Size(11, 11),
+                cv::Size(-1, -1),
+                cv::TermCriteria(cv::TermCriteria::EPS |
+                                 cv::TermCriteria::COUNT, 30, 0.1)
+            );
+            cv::drawChessboardCorners(movingFrame, boardSize,
+                                      movingCorners, true);
+            cv::Point2f movingCenter(0.0f, 0.0f);
+            for (const auto &corner : movingCorners)
+                movingCenter += corner;
+            movingCenter *= 1.0f / static_cast<float>(movingCorners.size());
+            if (lastMovingCenter.x >= 0.0f &&
+                cv::norm(movingCenter - lastMovingCenter) < 5.0)
+                ++movingStableCount;
+            else
+                movingStableCount = 0;
+            aimed = movingStableCount >= 3 &&
+                    cv::norm(movingCenter -
+                             cv::Point2f(movingFrame.cols / 2.0f,
+                                         movingFrame.rows / 2.0f)) < 20.0;
+            cv::circle(movingFrame, movingCenter, 6,
+                       aimed ? cv::Scalar(0, 255, 0)
+                             : cv::Scalar(0, 0, 255), -1);
+            lastMovingCenter = movingCenter;
+        }
+        else
+        {
+            movingStableCount = 0;
+            lastMovingCenter = {-1.0f, -1.0f};
+        }
+
+        cv::drawMarker(movingFrame,
+                       {movingFrame.cols / 2, movingFrame.rows / 2},
+                       {0, 255, 255}, cv::MARKER_CROSS, 24, 2);
 
         // ==========================
         // GRID
@@ -297,12 +383,20 @@ int main()
             2
         );
 
+        cv::putText(frame,
+                    px >= 0 && aimed ? "Ready - SPACE to record"
+                                     : "Find board in both cameras and center moving view",
+                    {20, 120}, cv::FONT_HERSHEY_SIMPLEX, 0.45,
+                    px >= 0 && aimed ? cv::Scalar(0, 255, 0)
+                                     : cv::Scalar(0, 200, 255), 1);
+
         // ==========================
         // SHOW WINDOW
         cv::imshow(
-            "Calibration PRO",
+            "Fixed camera",
             frame
         );
+        cv::imshow("Moving camera", movingFrame);
 
         // ==========================
         // KEYS
@@ -325,16 +419,16 @@ int main()
         // ==========================
         // SAVE POINT
         if (key == ' ' &&
-            fx != -1 &&
-            fy != -1)
+            px != -1 &&
+            py != -1 && aimed)
         {
             bool tooClose = false;
 
             for (auto &p : LUT)
             {
                 if (
-                    abs(p.px - fx) < 20 &&
-                    abs(p.py - fy) < 20
+                    abs(p.px - px) < 20 &&
+                    abs(p.py - py) < 20
                 )
                 {
                     tooClose = true;
@@ -345,15 +439,15 @@ int main()
             if (!tooClose)
             {
                 LUT.push_back({
-                    fx,
-                    fy,
+                    px,
+                    py,
                     servoX,
                     servoY
                 });
 
                 std::cout
                     << "Saved: "
-                    << fx << "," << fy
+                    << px << "," << py
                     << " -> "
                     << servoX << "," << servoY
                     << std::endl;
@@ -364,6 +458,11 @@ int main()
                     << "Point too close to existing point\n";
             }
         }
+        else if (key == ' ')
+        {
+            std::cout << "Board must be stable in fixed view and centered "
+                         "in moving view\n";
+        }
 
         // ==========================
         // APPEND SAVE FILE
@@ -373,6 +472,13 @@ int main()
                 CALIBRATION_FILE
             );
 
+            if (!file)
+            {
+                std::cerr << "Could not open " << CALIBRATION_FILE
+                          << " for writing\n";
+                continue;
+            }
+
             for (auto &p : LUT)
             {
                 file
@@ -380,6 +486,13 @@ int main()
                     << p.py << " "
                     << p.sx << " "
                     << p.sy << "\n";
+            }
+
+            file.flush();
+            if (!file)
+            {
+                std::cerr << "Could not save " << CALIBRATION_FILE << "\n";
+                continue;
             }
 
             std::cout
@@ -417,5 +530,5 @@ int main()
 
     gpioTerminate();
 
-    return 0;
+    return cameraError ? 1 : 0;
 }
