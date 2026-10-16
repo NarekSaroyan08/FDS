@@ -127,9 +127,13 @@ int main(int argc, char *argv[])
     cap.set(cv::CAP_PROP_FRAME_HEIGHT, 480);
     cap.set(cv::CAP_PROP_FPS, 30);
     cap.set(cv::CAP_PROP_BUFFERSIZE, 1);
+    // This camera supports MJPEG at 640x480/15 fps on the Raspberry Pi.
+    // Request it before the resolution to avoid a bandwidth-heavy raw stream.
+    movingCap.set(cv::CAP_PROP_FOURCC,
+                  cv::VideoWriter::fourcc('M', 'J', 'P', 'G'));
     movingCap.set(cv::CAP_PROP_FRAME_WIDTH, 640);
     movingCap.set(cv::CAP_PROP_FRAME_HEIGHT, 480);
-    movingCap.set(cv::CAP_PROP_FPS, 30);
+    movingCap.set(cv::CAP_PROP_FPS, 15);
     movingCap.set(cv::CAP_PROP_BUFFERSIZE, 1);
 
     // ==========================
