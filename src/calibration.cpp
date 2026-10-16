@@ -37,7 +37,7 @@ std::string cameraPath(const std::string &device)
 int main(int argc, char *argv[])
 {
     std::string fixedDevice = "/dev/video0";
-    std::string movingDevice = "/dev/video1";
+    std::string movingDevice = "/dev/video2";
     int cornersX = 7;
     int cornersY = 7;
     try
@@ -118,7 +118,7 @@ int main(int argc, char *argv[])
     {
         std::cerr << "Cannot open moving camera: " << movingDevice << "\n";
         std::cerr << "Check /dev/video* and v4l2-ctl --list-devices. "
-                     "The second camera is not always /dev/video1.\n";
+                     "The second camera is not always /dev/video2.\n";
         gpioTerminate();
         return 1;
     }
