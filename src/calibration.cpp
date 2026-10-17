@@ -10,6 +10,24 @@
 
 #define SERVO_X 17
 #define SERVO_Y 27
+#define MOTOR_IN1 13
+#define MOTOR_IN2 5
+
+constexpr unsigned MOTOR_STEP_US = 120000;
+
+void stopVerticalMotor()
+{
+    gpioWrite(MOTOR_IN1, 0);
+    gpioWrite(MOTOR_IN2, 0);
+}
+
+void pulseVerticalMotor(unsigned in1, unsigned in2)
+{
+    gpioWrite(MOTOR_IN1, in1);
+    gpioWrite(MOTOR_IN2, in2);
+    gpioDelay(MOTOR_STEP_US);
+    stopVerticalMotor();
+}
 
 #ifndef CALIBRATION_FILE
 #define CALIBRATION_FILE "data/fixed_to_servo.txt"
@@ -85,6 +103,9 @@ int main(int argc, char *argv[])
     // SAFE PWM FREQUENCY
     gpioSetPWMfrequency(SERVO_X, 50);
     gpioSetPWMfrequency(SERVO_Y, 50);
+    gpioSetMode(MOTOR_IN1, PI_OUTPUT);
+    gpioSetMode(MOTOR_IN2, PI_OUTPUT);
+    stopVerticalMotor();
 
     // ==========================
     // LOAD OLD LUT DATA
@@ -111,6 +132,7 @@ int main(int argc, char *argv[])
     if (!cap.open(fixedDevice, cv::CAP_V4L2))
     {
         std::cerr << "Cannot open fixed camera: " << fixedDevice << "\n";
+        stopVerticalMotor();
         gpioTerminate();
         return 1;
     }
@@ -119,6 +141,7 @@ int main(int argc, char *argv[])
         std::cerr << "Cannot open moving camera: " << movingDevice << "\n";
         std::cerr << "Check /dev/video* and v4l2-ctl --list-devices. "
                      "The second camera is not always /dev/video2.\n";
+        stopVerticalMotor();
         gpioTerminate();
         return 1;
     }
@@ -151,6 +174,8 @@ int main(int argc, char *argv[])
               << " inner corners\n";
     std::cout << "A/D -> X servo\n";
     std::cout << "W/S -> Y servo\n";
+    std::cout << "Z -> vertical motor down (120 ms per keypress)\n";
+    std::cout << "X -> vertical motor up (120 ms per keypress)\n";
     std::cout << "Aim until the board is centered in the MOVING camera\n";
     std::cout << "SPACE -> Record fixed-camera board position and servo angles\n";
     std::cout << "P -> Save all points to fixed_to_servo.txt\n";
@@ -420,6 +445,12 @@ int main(int argc, char *argv[])
         if (key == 's')
             servoY += 2;
 
+        // OpenCV reports key presses, not key releases, so use a bounded pulse.
+        if (key == 'z')
+            pulseVerticalMotor(1, 0);
+        if (key == 'x')
+            pulseVerticalMotor(0, 1);
+
         // ==========================
         // SAVE POINT
         if (key == ' ' &&
@@ -531,6 +562,7 @@ int main(int argc, char *argv[])
     // STOP SERVOS
     gpioServo(SERVO_X, 0);
     gpioServo(SERVO_Y, 0);
+    stopVerticalMotor();
 
     gpioTerminate();
 
