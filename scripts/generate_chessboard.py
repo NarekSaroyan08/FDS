@@ -1,17 +1,17 @@
-"""Generate the printable 8 x 12 calibration chessboard on A4 paper.
+"""Generate the printable 8 x 12 calibration chessboard on landscape A4.
 
 Requires reportlab only when regenerating the PDF, not on the Raspberry Pi.
 """
 
 from pathlib import Path
 
-from reportlab.lib.pagesizes import A4
+from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas
 
 
-COLS = 8
-ROWS = 12
+COLS = 12
+ROWS = 8
 SQUARE_MM = 21
 OUTPUT = (
     Path(__file__).resolve().parents[1]
@@ -20,7 +20,7 @@ OUTPUT = (
 
 
 def main() -> None:
-    page_width, page_height = A4
+    page_width, page_height = landscape(A4)
     square = SQUARE_MM * mm
     board_width = COLS * square
     board_height = ROWS * square
@@ -28,15 +28,17 @@ def main() -> None:
     y0 = (page_height - board_height) / 2
 
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
-    pdf = canvas.Canvas(str(OUTPUT), pagesize=A4, pageCompression=1)
-    pdf.setTitle("FaceTracker calibration chessboard - 8 x 12, 21 mm")
+    pdf = canvas.Canvas(
+        str(OUTPUT), pagesize=landscape(A4), pageCompression=1
+    )
+    pdf.setTitle("FaceTracker calibration chessboard - 12 x 8, 21 mm")
     pdf.setAuthor("FaceTracker")
 
     pdf.setFont("Helvetica-Bold", 10)
     pdf.drawCentredString(
         page_width / 2,
         page_height - 13 * mm,
-        "8 x 12 squares  |  21 mm each  |  Print at 100%",
+        "8 x 12 squares (12 across x 8 down)  |  21 mm each  |  Print at 100%",
     )
 
     pdf.setFillColorRGB(0, 0, 0)

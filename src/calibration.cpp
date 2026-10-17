@@ -38,8 +38,8 @@ int main(int argc, char *argv[])
 {
     std::string fixedDevice = "/dev/video0";
     std::string movingDevice = "/dev/video2";
-    int cornersX = 7;
-    int cornersY = 11;
+    int cornersX = 11;
+    int cornersY = 7;
     try
     {
         if (argc == 5)
