@@ -22,8 +22,6 @@
 #define CASCADE_FILE "data/haarcascade_frontalface_default.xml"
 #endif
 
-#define MOTOR_IN1 13
-#define MOTOR_IN2 5
 
 // ==========================
 // CALIBRATION STRUCT
@@ -175,7 +173,6 @@ void getServoFromLUT(
 int main(int argc, char *argv[])
 {
     std::string fixedCameraDevice = "/dev/video0";
-    bool motorEnabled = false;
     try
     {
         if (argc >= 2)
@@ -188,15 +185,12 @@ int main(int argc, char *argv[])
             else
                 fixedCameraDevice = requestedDevice;
         }
-        if (argc == 3)
-            motorEnabled = std::string(argv[2]) == "--enable-motor";
-        if (argc > 3 || fixedCameraDevice.empty() ||
-            (argc == 3 && !motorEnabled))
+        if (argc > 2 || fixedCameraDevice.empty())
             throw std::invalid_argument("arguments");
     }
     catch (const std::exception &)
     {
-        std::cerr << "Usage: facetracking [fixed_camera_device] [--enable-motor]\n";
+        std::cerr << "Usage: facetracking [fixed_camera_device]\n";
         return 1;
     }
 
@@ -211,13 +205,6 @@ int main(int argc, char *argv[])
         std::cout << "pigpio failed\n";
         return -1;
     }
-
-    // ==========================
-    // GPIO MODES
-    gpioSetMode(MOTOR_IN1, PI_OUTPUT);
-    gpioSetMode(MOTOR_IN2, PI_OUTPUT);
-    gpioWrite(MOTOR_IN1, 0);
-    gpioWrite(MOTOR_IN2, 0);
 
     // ==========================
     // SAFE PWM FREQUENCY
@@ -357,25 +344,6 @@ int main(int argc, char *argv[])
                 servoY = baseY;
 
                 // ==========================
-                // MOTOR CONTROL
-                int errorY = fy - 240;
-
-                if (!motorEnabled || abs(errorY) < 30)
-                {
-                    gpioWrite(MOTOR_IN1, 0);
-                    gpioWrite(MOTOR_IN2, 0);
-                }
-                else if (errorY < 0)
-                {
-                    gpioWrite(MOTOR_IN1, 0);
-                    gpioWrite(MOTOR_IN2, 1);
-                }
-                else
-                {
-                    gpioWrite(MOTOR_IN1, 1);
-                    gpioWrite(MOTOR_IN2, 0);
-                }
-
                 // DRAW
                 cv::circle(
                     frame,
@@ -405,9 +373,6 @@ int main(int argc, char *argv[])
                 servoY =
                     90 + waveY * 20;
 
-                // MOTOR STOP
-                gpioWrite(MOTOR_IN1, 0);
-                gpioWrite(MOTOR_IN2, 0);
             }
 
             // ==========================
@@ -491,9 +456,6 @@ int main(int argc, char *argv[])
     // STOP EVERYTHING
     gpioServo(SERVO_X, 0);
     gpioServo(SERVO_Y, 0);
-
-    gpioWrite(MOTOR_IN1, 0);
-    gpioWrite(MOTOR_IN2, 0);
 
     gpioTerminate();
 
