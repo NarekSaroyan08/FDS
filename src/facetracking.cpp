@@ -11,11 +11,16 @@
 #include <chrono>
 #include <string>
 #include <stdexcept>
+#include <csignal>
 
 #define SERVO_X 17
 #define SERVO_Y 27
+#define MOTOR_DOWN_PIN 13
+#define MOTOR_UP_PIN 5
 
 constexpr int MOTOR_CENTER_DEADBAND_PX = 30;
+constexpr unsigned MOTOR_PULSE_US = 120000;
+constexpr int MOTOR_MAX_PULSES = 20;
 
 enum class MotorDirection { Stop, Up, Down };
 
@@ -27,6 +32,33 @@ MotorDirection desiredMotorDirection(int faceY, int frameHeight)
     if (errorY > MOTOR_CENTER_DEADBAND_PX)
         return MotorDirection::Down;
     return MotorDirection::Stop;
+}
+
+bool stopMotor(unsigned inactiveLevel)
+{
+    const int downResult = gpioWrite(MOTOR_DOWN_PIN, inactiveLevel);
+    const int upResult = gpioWrite(MOTOR_UP_PIN, inactiveLevel);
+    return downResult == 0 && upResult == 0;
+}
+
+bool pulseMotor(MotorDirection direction, unsigned activeLevel)
+{
+    const unsigned inactiveLevel = 1 - activeLevel;
+    if (!stopMotor(inactiveLevel))
+        return false;
+    if (direction == MotorDirection::Stop)
+        return true;
+
+    // Let one relay release before energizing the other.
+    gpioDelay(50000);
+    if (gpioWrite(direction == MotorDirection::Up ? MOTOR_UP_PIN : MOTOR_DOWN_PIN,
+                  activeLevel) != 0)
+    {
+        stopMotor(inactiveLevel);
+        return false;
+    }
+    gpioDelay(MOTOR_PULSE_US);
+    return stopMotor(inactiveLevel);
 }
 
 #ifndef CALIBRATION_FILE
@@ -51,6 +83,12 @@ std::vector<CalibrationPoint> LUT;
 // GLOBAL FLAGS
 std::atomic<bool> running(true);
 std::atomic<bool> faceDetected(false);
+volatile std::sig_atomic_t shutdownRequested = 0;
+
+void handleSignal(int)
+{
+    shutdownRequested = 1;
+}
 
 // ==========================
 // THREAD SAFE SERVO TARGETS
@@ -187,24 +225,47 @@ void getServoFromLUT(
 int main(int argc, char *argv[])
 {
     std::string fixedCameraDevice = "/dev/video0";
+    bool motorEnabled = false;
+    bool cameraProvided = false;
+    bool relayPolarityProvided = false;
+    unsigned motorActiveLevel = 1;
     try
     {
-        if (argc >= 2)
+        for (int i = 1; i < argc; ++i)
         {
-            const std::string requestedDevice = argv[1];
-            if (!requestedDevice.empty() &&
-                std::all_of(requestedDevice.begin(), requestedDevice.end(),
+            const std::string arg = argv[i];
+            if (arg == "--enable-motor")
+                motorEnabled = true;
+            else if (arg == "--relay-active-low" && !relayPolarityProvided)
+            {
+                motorActiveLevel = 0;
+                relayPolarityProvided = true;
+            }
+            else if (arg == "--relay-active-high" && !relayPolarityProvided)
+            {
+                motorActiveLevel = 1;
+                relayPolarityProvided = true;
+            }
+            else if (!cameraProvided && !arg.empty() && arg[0] != '-')
+            {
+                cameraProvided = true;
+                if (std::all_of(arg.begin(), arg.end(),
                             [](char c) { return c >= '0' && c <= '9'; }))
-                fixedCameraDevice = "/dev/video" + requestedDevice;
+                    fixedCameraDevice = "/dev/video" + arg;
+                else
+                    fixedCameraDevice = arg;
+            }
             else
-                fixedCameraDevice = requestedDevice;
+                throw std::invalid_argument("arguments");
         }
-        if (argc > 2 || fixedCameraDevice.empty())
+        if (fixedCameraDevice.empty() ||
+            (relayPolarityProvided && !motorEnabled))
             throw std::invalid_argument("arguments");
     }
     catch (const std::exception &)
     {
-        std::cerr << "Usage: facetracking [fixed_camera_device]\n";
+        std::cerr << "Usage: facetracking [fixed_camera_device] "
+                     "[--enable-motor [--relay-active-high|--relay-active-low]]\n";
         return 1;
     }
 
@@ -214,11 +275,14 @@ int main(int argc, char *argv[])
 
     // ==========================
     // INIT PIGPIO
+    gpioCfgSetInternals(gpioCfgGetInternals() | PI_CFG_NOSIGHANDLER);
     if (gpioInitialise() < 0)
     {
         std::cout << "pigpio failed\n";
         return -1;
     }
+    std::signal(SIGINT, handleSignal);
+    std::signal(SIGTERM, handleSignal);
 
     // ==========================
     // SAFE PWM FREQUENCY
@@ -264,6 +328,25 @@ int main(int argc, char *argv[])
         return -1;
     }
 
+    if (motorEnabled)
+    {
+        // Both inactive relay inputs must physically stop the motor.
+        const unsigned inactiveLevel = 1 - motorActiveLevel;
+        const unsigned pull = inactiveLevel ? PI_PUD_UP : PI_PUD_DOWN;
+        gpioSetPullUpDown(MOTOR_DOWN_PIN, pull);
+        gpioSetPullUpDown(MOTOR_UP_PIN, pull);
+        const bool preset = stopMotor(inactiveLevel);
+        const int downMode = gpioSetMode(MOTOR_DOWN_PIN, PI_OUTPUT);
+        const int upMode = gpioSetMode(MOTOR_UP_PIN, PI_OUTPUT);
+        const bool stopped = stopMotor(inactiveLevel);
+        if (!preset || downMode < 0 || upMode < 0 || !stopped)
+        {
+            std::cerr << "Cannot initialise motor relay GPIO 13/5\n";
+            gpioTerminate();
+            return 1;
+        }
+    }
+
     // ==========================
     // SAFE CENTER
     gpioServo(SERVO_X, 1500);
@@ -275,9 +358,18 @@ int main(int argc, char *argv[])
     {
         int lastFx = 320;
         int lastFy = 240;
+        int motorPulses = 0;
+        auto nextMotorPulse = std::chrono::steady_clock::now();
 
-        while (running)
+        while (running && !shutdownRequested)
         {
+            if (motorEnabled && !stopMotor(1 - motorActiveLevel))
+            {
+                std::cerr << "Cannot stop motor relay; disconnect motor power\n";
+                running = false;
+                break;
+            }
+
             cv::Mat frame;
 
             if (!cap.read(frame))
@@ -320,6 +412,7 @@ int main(int argc, char *argv[])
             );
 
             std::string motorPreview = "STOP (no face)";
+            MotorDirection motorDirection = MotorDirection::Stop;
 
             // ==========================
             // FACE FOUND
@@ -335,7 +428,8 @@ int main(int argc, char *argv[])
                 int fy =
                     (f.y + f.height / 2) * 2;
 
-                switch (desiredMotorDirection(fy, frame.rows))
+                motorDirection = desiredMotorDirection(fy, frame.rows);
+                switch (motorDirection)
                 {
                 case MotorDirection::Up:
                     motorPreview = "UP";
@@ -372,6 +466,21 @@ int main(int argc, char *argv[])
                 servoX = baseX;
                 servoY = baseY;
 
+                if (motorEnabled && motorDirection != MotorDirection::Stop &&
+                    motorPulses < MOTOR_MAX_PULSES &&
+                    std::chrono::steady_clock::now() >= nextMotorPulse)
+                {
+                    if (!pulseMotor(motorDirection, motorActiveLevel))
+                    {
+                        std::cerr << "Motor relay GPIO failed; disconnect motor power\n";
+                        running = false;
+                        break;
+                    }
+                    ++motorPulses;
+                    nextMotorPulse = std::chrono::steady_clock::now() +
+                                     std::chrono::milliseconds(500);
+                }
+
                 // ==========================
                 // DRAW
                 cv::circle(
@@ -405,10 +514,13 @@ int main(int argc, char *argv[])
             }
 
             // ==========================
-            // Preview the intended direction without energizing the relays.
+            // Show the direction and whether relay output is enabled.
             cv::line(frame, {0, frame.rows / 2},
                      {frame.cols - 1, frame.rows / 2}, {0, 255, 255}, 1);
-            cv::putText(frame, "Motor preview: " + motorPreview + " (relay disabled)",
+            const std::string motorState = !motorEnabled ? "relay disabled" :
+                                           motorPulses >= MOTOR_MAX_PULSES ? "pulse limit" :
+                                           "relay enabled";
+            cv::putText(frame, "Motor: " + motorPreview + " (" + motorState + ")",
                         {10, 30}, cv::FONT_HERSHEY_SIMPLEX, 0.55,
                         {0, 0, 255}, 2);
 
@@ -435,7 +547,7 @@ int main(int argc, char *argv[])
         double outX = 90;
         double outY = 90;
 
-        while (running)
+        while (running && !shutdownRequested)
         {
             // PID ERRORS
             double errX =
@@ -492,6 +604,8 @@ int main(int argc, char *argv[])
     // STOP EVERYTHING
     gpioServo(SERVO_X, 0);
     gpioServo(SERVO_Y, 0);
+    if (motorEnabled && !stopMotor(1 - motorActiveLevel))
+        std::cerr << "Motor relay GPIO stop failed; disconnect motor power\n";
 
     gpioTerminate();
 
