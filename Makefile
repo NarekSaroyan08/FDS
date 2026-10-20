@@ -12,7 +12,7 @@ BUILD_DIR := build
 
 TARGETS := $(BUILD_DIR)/facetracking $(BUILD_DIR)/calibration
 
-.PHONY: all clean run run-motor calibrate
+.PHONY: all clean run calibrate
 
 all: $(TARGETS)
 
@@ -24,9 +24,6 @@ $(BUILD_DIR):
 
 # Run from the project root so data/ paths resolve
 run: $(BUILD_DIR)/facetracking
-	sudo ./$(BUILD_DIR)/facetracking
-
-run-motor: $(BUILD_DIR)/facetracking
 	sudo ./$(BUILD_DIR)/facetracking /dev/video0 --enable-motor
 
 calibrate: $(BUILD_DIR)/calibration
