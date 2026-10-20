@@ -36,4 +36,5 @@ touch data/fixed_to_servo.txt
 echo "Setup complete!"
 echo "Build:      make"
 echo "Calibrate:  make calibrate   (or: sudo ./build/calibration)"
-echo "Track:      make run         (or: sudo ./build/facetracking)"
+echo "Test SDK:   make test"
+echo "Track:      make run"

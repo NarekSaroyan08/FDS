@@ -1,5 +1,6 @@
 #include <opencv2/opencv.hpp>
 #include <pigpio.h>
+#include "facetracker/sdk.hpp"
 
 #include <iostream>
 #include <vector>
@@ -18,21 +19,9 @@
 #define MOTOR_DOWN_PIN 13
 #define MOTOR_UP_PIN 5
 
-constexpr int MOTOR_CENTER_DEADBAND_PX = 30;
 constexpr unsigned MOTOR_PULSE_US = 120000;
-constexpr int MOTOR_MAX_PULSES = 20;
 
-enum class MotorDirection { Stop, Up, Down };
-
-MotorDirection desiredMotorDirection(int faceY, int frameHeight)
-{
-    const int errorY = faceY - frameHeight / 2;
-    if (errorY < -MOTOR_CENTER_DEADBAND_PX)
-        return MotorDirection::Up;
-    if (errorY > MOTOR_CENTER_DEADBAND_PX)
-        return MotorDirection::Down;
-    return MotorDirection::Stop;
-}
+using facetracker::MotorDirection;
 
 bool stopMotor(unsigned inactiveLevel)
 {
@@ -69,15 +58,7 @@ bool pulseMotor(MotorDirection direction, unsigned activeLevel)
 #endif
 
 
-// ==========================
-// CALIBRATION STRUCT
-struct CalibrationPoint
-{
-    int px, py;
-    int sx, sy;
-};
-
-std::vector<CalibrationPoint> LUT;
+std::vector<facetracker::CalibrationPoint> LUT;
 
 // ==========================
 // GLOBAL FLAGS
@@ -137,7 +118,7 @@ void loadLUT()
         return;
     }
 
-    CalibrationPoint p;
+    facetracker::CalibrationPoint p;
 
     while (file >> p.px >> p.py >> p.sx >> p.sy)
     {
@@ -147,78 +128,6 @@ void loadLUT()
     std::cout << "Loaded LUT: "
               << LUT.size()
               << std::endl;
-}
-
-// ==========================
-// LUT INTERPOLATION
-void getServoFromLUT(
-    int fx,
-    int fy,
-    int &sx,
-    int &sy
-)
-{
-    // SAFETY
-    if (LUT.empty())
-    {
-        sx = 90;
-        sy = 90;
-        return;
-    }
-
-    std::vector<
-        std::pair<double, CalibrationPoint>
-    > dist;
-
-    for (auto &p : LUT)
-    {
-        double dx = p.px - fx;
-        double dy = p.py - fy;
-
-        double d = sqrt(dx * dx + dy * dy);
-
-        dist.push_back({d, p});
-    }
-
-    std::sort(
-        dist.begin(),
-        dist.end(),
-        [](auto &a, auto &b)
-        {
-            return a.first < b.first;
-        }
-    );
-
-    int k = std::min(
-        5,
-        (int)dist.size()
-    );
-
-    double sumW = 0;
-    double sumX = 0;
-    double sumY = 0;
-
-    for (int i = 0; i < k; i++)
-    {
-        double d = dist[i].first + 1.0;
-
-        double w = 1.0 / (d * d);
-
-        sumX += dist[i].second.sx * w;
-        sumY += dist[i].second.sy * w;
-
-        sumW += w;
-    }
-
-    if (sumW == 0)
-    {
-        sx = 90;
-        sy = 90;
-        return;
-    }
-
-    sx = int(sumX / sumW);
-    sy = int(sumY / sumW);
 }
 
 // ==========================
@@ -358,8 +267,7 @@ int main(int argc, char *argv[])
     {
         int lastFx = 320;
         int lastFy = 240;
-        int motorPulses = 0;
-        auto nextMotorPulse = std::chrono::steady_clock::now();
+        facetracker::PulseLimiter motorLimiter;
 
         while (running && !shutdownRequested)
         {
@@ -428,7 +336,7 @@ int main(int argc, char *argv[])
                 int fy =
                     (f.y + f.height / 2) * 2;
 
-                motorDirection = desiredMotorDirection(fy, frame.rows);
+                motorDirection = facetracker::motorDirectionForFace(fy, frame.rows);
                 switch (motorDirection)
                 {
                 case MotorDirection::Up:
@@ -453,22 +361,13 @@ int main(int argc, char *argv[])
                 lastFx = fx;
                 lastFy = fy;
 
-                int baseX;
-                int baseY;
+                const auto target = facetracker::servoAnglesForPoint(
+                    LUT, predFx, predFy);
+                servoX = target.x;
+                servoY = target.y;
 
-                getServoFromLUT(
-                    predFx,
-                    predFy,
-                    baseX,
-                    baseY
-                );
-
-                servoX = baseX;
-                servoY = baseY;
-
-                if (motorEnabled && motorDirection != MotorDirection::Stop &&
-                    motorPulses < MOTOR_MAX_PULSES &&
-                    std::chrono::steady_clock::now() >= nextMotorPulse)
+                if (motorEnabled && motorLimiter.canPulse(
+                        motorDirection, facetracker::PulseLimiter::Clock::now()))
                 {
                     if (!pulseMotor(motorDirection, motorActiveLevel))
                     {
@@ -476,9 +375,8 @@ int main(int argc, char *argv[])
                         running = false;
                         break;
                     }
-                    ++motorPulses;
-                    nextMotorPulse = std::chrono::steady_clock::now() +
-                                     std::chrono::milliseconds(500);
+                    motorLimiter.recordCompletedPulse(
+                        facetracker::PulseLimiter::Clock::now());
                 }
 
                 // ==========================
@@ -518,7 +416,7 @@ int main(int argc, char *argv[])
             cv::line(frame, {0, frame.rows / 2},
                      {frame.cols - 1, frame.rows / 2}, {0, 255, 255}, 1);
             const std::string motorState = !motorEnabled ? "relay disabled" :
-                                           motorPulses >= MOTOR_MAX_PULSES ? "pulse limit" :
+                                           motorLimiter.limitReached() ? "pulse limit" :
                                            "relay enabled";
             cv::putText(frame, "Motor: " + motorPreview + " (" + motorState + ")",
                         {10, 30}, cv::FONT_HERSHEY_SIMPLEX, 0.55,

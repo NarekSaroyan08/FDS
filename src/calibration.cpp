@@ -1,5 +1,6 @@
 #include <opencv2/opencv.hpp>
 #include <pigpio.h>
+#include "facetracker/sdk.hpp"
 
 #include <iostream>
 #include <vector>
@@ -16,11 +17,7 @@
 #endif
 // ==========================
 // CALIBRATION STRUCT
-struct CalibrationPoint
-{
-    int px, py;
-    int sx, sy;
-};
+using CalibrationPoint = facetracker::CalibrationPoint;
 
 std::vector<CalibrationPoint> LUT;
 

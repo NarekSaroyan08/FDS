@@ -1,0 +1,16 @@
+name: Тесты SDK
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  sdk-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Запуск unit-тестов SDK
+        run: make test

@@ -13,6 +13,7 @@
 - [Зависимости](#зависимости)
 - [Установка](#установка)
 - [Сборка](#сборка)
+- [SDK и unit-тесты](#sdk-и-unit-тесты)
 - [Калибровка](#калибровка)
 - [Запуск трекинга](#запуск-трекинга)
 - [Клавиши управления](#клавиши-управления)
@@ -29,9 +30,14 @@
 
 ```
 FaceTracker/
+├── include/facetracker/
+│   └── sdk.hpp              # открытый интерфейс SDK без зависимостей от Pi
 ├── src/
 │   ├── facetracking.cpp      # детекция на неподвижной камере + PID-сервы
-│   └── calibration.cpp       # калибровка LUT по двум камерам и шахматной доске
+│   ├── calibration.cpp       # калибровка LUT по двум камерам и шахматной доске
+│   └── sdk.cpp               # расчёт углов, направления и лимита импульсов
+├── tests/
+│   └── sdk_tests.cpp         # unit-тесты SDK без камер и GPIO
 ├── data/
 │   ├── haarcascade_frontalface_default.xml   # модель детектора лиц OpenCV
 │   ├── calibration.txt       # таблица старой однокамерной калибровки
@@ -43,7 +49,7 @@ FaceTracker/
 │   ├── src/facetracking.cpp
 │   ├── src/calibration.cpp
 │   └── scripts/setup_project.sh
-├── Makefile                  # сборка: make / make run / make calibrate / make clean
+├── Makefile                  # сборка: make / make test / make run / make calibrate
 ├── .gitignore
 └── README.md
 ```
@@ -52,6 +58,8 @@ FaceTracker/
 |------|-----------|
 | `src/facetracking.cpp` | Два потока: **vision** (захват с неподвижной камеры, поиск лица, пересчёт в целевые углы по LUT, поиск при потере лица) и **servo** (PID-сглаживание и выдача импульсов на сервоприводы каждые 15 мс). |
 | `src/calibration.cpp` | Открывает обе камеры, ищет шахматную доску и записывает пары «центр доски в неподвижной камере ↔ углы сервоприводов», когда доска находится в центре подвижной камеры. |
+| `include/facetracker/sdk.hpp`, `src/sdk.cpp` | Повторно используемая библиотека `libfacetracker_sdk.a`: расчёты без OpenCV и pigpio. |
+| `tests/sdk_tests.cpp` | Проверяет направления, границы центральной зоны, интерполяцию LUT, паузу и предел импульсов. |
 | `data/haarcascade_frontalface_default.xml` | Стандартный каскад Хаара из репозитория OpenCV (фронтальные лица). |
 | `data/fixed_to_servo.txt` | Таблица новой калибровки. Файл старой однокамерной калибровки `data/calibration.txt` не используется. |
 | `old/` | Предыдущие версии файлов. Makefile их не собирает. |
@@ -119,7 +127,8 @@ chmod +x scripts/setup_project.sh
 ## Сборка
 
 ```bash
-make            # собирает build/facetracking и build/calibration
+make            # собирает SDK, build/facetracking и build/calibration
+make test       # собирает и запускает unit-тесты SDK
 make clean      # удаляет бинарники
 ```
 
@@ -127,11 +136,45 @@ make clean      # удаляет бинарники
 
 ```bash
 mkdir -p build
-g++ -O2 -std=c++17 -o build/facetracking src/facetracking.cpp `pkg-config --cflags --libs opencv4` -lpigpio -lpthread -lrt
-g++ -O2 -std=c++17 -o build/calibration  src/calibration.cpp  `pkg-config --cflags --libs opencv4` -lpigpio -lpthread -lrt
+g++ -O2 -std=c++17 -Iinclude -c src/sdk.cpp -o build/sdk.o
+ar rcs build/libfacetracker_sdk.a build/sdk.o
+g++ -O2 -std=c++17 -Iinclude -o build/facetracking src/facetracking.cpp build/libfacetracker_sdk.a `pkg-config --cflags --libs opencv4` -lpigpio -lpthread -lrt
+g++ -O2 -std=c++17 -Iinclude -o build/calibration src/calibration.cpp `pkg-config --cflags --libs opencv4` -lpigpio -lpthread -lrt
 ```
 
 Нужен C++17 (`std::clamp`). Обе программы открывают окно OpenCV (`imshow`), поэтому нужен рабочий стол или X-forwarding (`ssh -X`).
+
+---
+
+## SDK и unit-тесты
+
+SDK предоставляет заголовок `include/facetracker/sdk.hpp` и статическую библиотеку `build/libfacetracker_sdk.a`. В нём нет обращений к камерам или GPIO:
+
+- `CalibrationPoint` хранит координаты доски в неподвижной камере и углы двух сервоприводов; `servoAnglesForPoint` получает углы для новой точки по пяти ближайшим записям LUT.
+- `motorDirectionForFace` сравнивает вертикальную координату лица с центром кадра и возвращает `Up`, `Down` или `Stop`. По умолчанию центральная зона — ±30 пикселей.
+- `PulseLimiter` разрешает импульсы с паузой не менее 500 мс и останавливает их после 20 успешных импульсов за запуск.
+
+Трекер использует эти функции для принятия решений. OpenCV находит лицо, SDK рассчитывает углы и направление, а код в `src/facetracking.cpp` отправляет команды в pigpio. Поэтому `make run` по-прежнему запускает всю систему одной командой после сборки.
+
+Пример использования в другом C++17-приложении после `make`:
+
+```cpp
+#include "facetracker/sdk.hpp"
+
+std::vector<facetracker::CalibrationPoint> points{{320, 240, 90, 90}};
+auto angles = facetracker::servoAnglesForPoint(points, 320, 240);
+auto direction = facetracker::motorDirectionForFace(180, 480);
+```
+
+Подключите `-Iinclude` при компиляции и `build/libfacetracker_sdk.a` при линковке. SDK возвращает решения, но сам не включает реле и не открывает камеры.
+
+```bash
+make test
+```
+
+Тесты проверяют направления и границы зоны, LUT с пустой, одной и несколькими точками, выбор ближайшей точки, паузу между импульсами и предел их числа. Для `make test` нужны только C++17, `make` и `ar`; Raspberry Pi, OpenCV, pigpio, камеры и мотор не требуются. Тесты не подтверждают электрическое подключение реле или фактическое движение мотора.
+
+При отправке изменений в GitHub тот же `make test` запускается автоматически через `.github/workflows/sdk-tests.yml`.
 
 ---
 
@@ -247,7 +290,7 @@ make run                # = sudo ./build/facetracking /dev/video0 --enable-motor
 | `PID pidX/pidY` | facetracking.cpp | 0.12 / 0.0001 / 0.08 | kp / ki / kd |
 | Диапазон углов | оба файла | 20…160° | механическая защита |
 | Формула импульса | оба файла | `1000 + angle·5` мкс | подстройте под свои серво |
-| `k` в LUT | facetracking.cpp | 5 | число соседей для интерполяции |
+| `k` в LUT | sdk.hpp | 5 | число соседей для интерполяции |
 | Коэф. прогноза | facetracking.cpp | 0.5 | 0 отключает прогноз |
 | Амплитуды поиска | facetracking.cpp | 40° / 20° | |
 
