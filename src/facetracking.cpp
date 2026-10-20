@@ -15,6 +15,20 @@
 #define SERVO_X 17
 #define SERVO_Y 27
 
+constexpr int MOTOR_CENTER_DEADBAND_PX = 30;
+
+enum class MotorDirection { Stop, Up, Down };
+
+MotorDirection desiredMotorDirection(int faceY, int frameHeight)
+{
+    const int errorY = faceY - frameHeight / 2;
+    if (errorY < -MOTOR_CENTER_DEADBAND_PX)
+        return MotorDirection::Up;
+    if (errorY > MOTOR_CENTER_DEADBAND_PX)
+        return MotorDirection::Down;
+    return MotorDirection::Stop;
+}
+
 #ifndef CALIBRATION_FILE
 #define CALIBRATION_FILE "data/fixed_to_servo.txt"
 #endif
@@ -305,6 +319,8 @@ int main(int argc, char *argv[])
                 3
             );
 
+            std::string motorPreview = "STOP (no face)";
+
             // ==========================
             // FACE FOUND
             if (faces.size() > 0)
@@ -318,6 +334,19 @@ int main(int argc, char *argv[])
 
                 int fy =
                     (f.y + f.height / 2) * 2;
+
+                switch (desiredMotorDirection(fy, frame.rows))
+                {
+                case MotorDirection::Up:
+                    motorPreview = "UP";
+                    break;
+                case MotorDirection::Down:
+                    motorPreview = "DOWN";
+                    break;
+                case MotorDirection::Stop:
+                    motorPreview = "STOP (centered)";
+                    break;
+                }
 
                 // ==========================
                 // PREDICTION
@@ -376,6 +405,13 @@ int main(int argc, char *argv[])
             }
 
             // ==========================
+            // Preview the intended direction without energizing the relays.
+            cv::line(frame, {0, frame.rows / 2},
+                     {frame.cols - 1, frame.rows / 2}, {0, 255, 255}, 1);
+            cv::putText(frame, "Motor preview: " + motorPreview + " (relay disabled)",
+                        {10, 30}, cv::FONT_HERSHEY_SIMPLEX, 0.55,
+                        {0, 0, 255}, 2);
+
             // SHOW WINDOW
             cv::imshow(
                 "PRO Tracker",
