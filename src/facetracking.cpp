@@ -145,7 +145,6 @@ void loadLUT()
 
     if (!file.is_open())
     {
-        std::cout << "No fixed_to_servo.txt found\n";
         return;
     }
 
@@ -155,10 +154,6 @@ void loadLUT()
     {
         LUT.push_back(p);
     }
-
-    std::cout << "Loaded LUT: "
-              << LUT.size()
-              << std::endl;
 }
 
 // ==========================
@@ -257,8 +252,6 @@ int main(int argc, char *argv[])
     cap.set(cv::CAP_PROP_FRAME_HEIGHT, 480);
     cap.set(cv::CAP_PROP_FPS, CAMERA_FPS);
     cap.set(cv::CAP_PROP_BUFFERSIZE, 1);
-    std::cout << "Fixed camera requested FPS: " << CAMERA_FPS
-              << ", driver reports: " << cap.get(cv::CAP_PROP_FPS) << '\n';
 
     // ==========================
     // FACE CASCADE
@@ -562,15 +555,6 @@ int main(int argc, char *argv[])
                 }
                 applied = next;
                 appliedMotorDirection = next;
-                const char *reason = next != MotorDirection::Stop ? "face target" :
-                                     !frameFresh ? "camera frame timeout" :
-                                     guard.limitReached() ? "run limit" :
-                                     target == MotorTarget::NoFace ? "face lost" :
-                                     target == MotorTarget::Centered ? "face centered" :
-                                     "waiting for stable direction";
-                std::cout << "Motor relay: " << motorDirectionLabel(next)
-                          << " (" << reason << ", frame age " << age
-                          << " ms)\n";
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
         }
