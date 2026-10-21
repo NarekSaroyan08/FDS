@@ -14,11 +14,9 @@ MotorDirection motorDirectionForFace(int faceY, int frameHeight,
         return MotorDirection::Stop;
 
     const int errorY = faceY - frameHeight / 2;
-    if (errorY < -deadbandPixels)
-        return MotorDirection::Up;
-    if (errorY > deadbandPixels)
-        return MotorDirection::Down;
-    return MotorDirection::Stop;
+    if (errorY > -deadbandPixels && errorY < deadbandPixels)
+        return MotorDirection::Stop;
+    return errorY < 0 ? MotorDirection::Up : MotorDirection::Down;
 }
 
 ServoAngles servoAnglesForPoint(const std::vector<CalibrationPoint>& points,

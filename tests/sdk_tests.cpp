@@ -28,10 +28,14 @@ void testMotorDirection()
            "лицо выше центральной зоны: вверх");
     expect(motorDirectionForFace(271, 480) == MotorDirection::Down,
            "лицо ниже центральной зоны: вниз");
-    expect(motorDirectionForFace(210, 480) == MotorDirection::Stop,
-           "верхняя граница зоны: стоп");
-    expect(motorDirectionForFace(270, 480) == MotorDirection::Stop,
-           "нижняя граница зоны: стоп");
+    expect(motorDirectionForFace(210, 480) == MotorDirection::Up,
+           "верхняя граница зоны: вверх, как в исходной версии");
+    expect(motorDirectionForFace(270, 480) == MotorDirection::Down,
+           "нижняя граница зоны: вниз, как в исходной версии");
+    expect(motorDirectionForFace(211, 480) == MotorDirection::Stop,
+           "внутри верхней границы: стоп");
+    expect(motorDirectionForFace(269, 480) == MotorDirection::Stop,
+           "внутри нижней границы: стоп");
     expect(motorDirectionForFace(240, 480) == MotorDirection::Stop,
            "центр кадра: стоп");
     expect(motorDirectionForFace(10, 0) == MotorDirection::Stop,

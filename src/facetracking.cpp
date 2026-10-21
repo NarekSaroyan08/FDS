@@ -131,6 +131,53 @@ void loadLUT()
 }
 
 // ==========================
+// Интерполяция LUT из первой версии трекера.
+void getServoFromLUT(int fx, int fy, int &sx, int &sy)
+{
+    if (LUT.empty())
+    {
+        sx = 90;
+        sy = 90;
+        return;
+    }
+
+    std::vector<std::pair<double, facetracker::CalibrationPoint>> dist;
+    for (const auto &p : LUT)
+    {
+        const double dx = p.px - fx;
+        const double dy = p.py - fy;
+        const double d = sqrt(dx * dx + dy * dy);
+        dist.push_back({d, p});
+    }
+
+    std::sort(dist.begin(), dist.end(),
+              [](const auto &a, const auto &b) { return a.first < b.first; });
+
+    const int k = std::min(5, static_cast<int>(dist.size()));
+    double sumW = 0;
+    double sumX = 0;
+    double sumY = 0;
+    for (int i = 0; i < k; ++i)
+    {
+        const double d = dist[i].first + 1.0;
+        const double w = 1.0 / (d * d);
+        sumX += dist[i].second.sx * w;
+        sumY += dist[i].second.sy * w;
+        sumW += w;
+    }
+
+    if (sumW == 0)
+    {
+        sx = 90;
+        sy = 90;
+        return;
+    }
+
+    sx = static_cast<int>(sumX / sumW);
+    sy = static_cast<int>(sumY / sumW);
+}
+
+// ==========================
 int main(int argc, char *argv[])
 {
     std::string fixedCameraDevice = "/dev/video0";
@@ -336,7 +383,13 @@ int main(int argc, char *argv[])
                 int fy =
                     (f.y + f.height / 2) * 2;
 
-                motorDirection = facetracker::motorDirectionForFace(fy, frame.rows);
+                const int errorY = fy - frame.rows / 2;
+                if (abs(errorY) < 30)
+                    motorDirection = MotorDirection::Stop;
+                else if (errorY < 0)
+                    motorDirection = MotorDirection::Up;
+                else
+                    motorDirection = MotorDirection::Down;
                 switch (motorDirection)
                 {
                 case MotorDirection::Up:
@@ -361,10 +414,11 @@ int main(int argc, char *argv[])
                 lastFx = fx;
                 lastFy = fy;
 
-                const auto target = facetracker::servoAnglesForPoint(
-                    LUT, predFx, predFy);
-                servoX = target.x;
-                servoY = target.y;
+                int baseX;
+                int baseY;
+                getServoFromLUT(predFx, predFy, baseX, baseY);
+                servoX = baseX;
+                servoY = baseY;
 
                 if (motorEnabled && motorLimiter.canPulse(
                         motorDirection, facetracker::PulseLimiter::Clock::now()))
