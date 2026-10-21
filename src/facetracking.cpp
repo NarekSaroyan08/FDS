@@ -21,6 +21,10 @@
 #define MOTOR_UP_PIN 5
 
 constexpr auto MOTOR_FRAME_TIMEOUT = std::chrono::milliseconds(500);
+constexpr auto MOTOR_FACE_GRACE = std::chrono::milliseconds(600);
+constexpr int MOTOR_START_DEADBAND = 40;
+constexpr int MOTOR_STOP_DEADBAND = 20;
+constexpr double CAMERA_FPS = 60.0;
 
 using facetracker::MotorDirection;
 enum class MotorTarget { NoFace, Centered, Up, Down };
@@ -234,10 +238,14 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    cap.set(cv::CAP_PROP_FOURCC,
+            cv::VideoWriter::fourcc('M', 'J', 'P', 'G'));
     cap.set(cv::CAP_PROP_FRAME_WIDTH, 640);
     cap.set(cv::CAP_PROP_FRAME_HEIGHT, 480);
-    cap.set(cv::CAP_PROP_FPS, 30);
+    cap.set(cv::CAP_PROP_FPS, CAMERA_FPS);
     cap.set(cv::CAP_PROP_BUFFERSIZE, 1);
+    std::cout << "Fixed camera requested FPS: " << CAMERA_FPS
+              << ", driver reports: " << cap.get(cv::CAP_PROP_FPS) << '\n';
 
     // ==========================
     // FACE CASCADE
@@ -281,6 +289,8 @@ int main(int argc, char *argv[])
     {
         int lastFx = 320;
         int lastFy = 240;
+        MotorDirection latchedMotorDirection = MotorDirection::Stop;
+        std::int64_t lastDetectedFaceMs = -1;
         while (running && !shutdownRequested)
         {
             cv::Mat frame;
@@ -332,6 +342,11 @@ int main(int argc, char *argv[])
             if (faces.size() > 0)
             {
                 faceDetected = true;
+                const auto faceTime = steadyClockMilliseconds();
+                if (lastDetectedFaceMs < 0 ||
+                    faceTime - lastDetectedFaceMs > MOTOR_FACE_GRACE.count())
+                    latchedMotorDirection = MotorDirection::Stop;
+                lastDetectedFaceMs = faceTime;
 
                 cv::Rect f = faces[0];
 
@@ -341,7 +356,10 @@ int main(int argc, char *argv[])
                 int fy =
                     (f.y + f.height / 2) * 2;
 
-                motorDirection = facetracker::motorDirectionForFace(fy, frame.rows);
+                motorDirection = facetracker::motorDirectionWithHysteresis(
+                    fy, frame.rows, latchedMotorDirection,
+                    MOTOR_START_DEADBAND, MOTOR_STOP_DEADBAND);
+                latchedMotorDirection = motorDirection;
                 switch (motorDirection)
                 {
                 case MotorDirection::Up:
@@ -497,7 +515,8 @@ int main(int argc, char *argv[])
         if (!motorEnabled)
             return;
 
-        facetracker::MotorRunGuard guard;
+        facetracker::MotorRunGuard guard(std::chrono::seconds(5),
+                                        MOTOR_FACE_GRACE);
         MotorDirection applied = MotorDirection::Stop;
         while (running && !shutdownRequested)
         {

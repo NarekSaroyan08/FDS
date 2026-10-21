@@ -44,6 +44,31 @@ void testMotorDirection()
            "некорректная мёртвая зона: стоп");
 }
 
+void testMotorHysteresis()
+{
+    using facetracker::MotorDirection;
+    using facetracker::motorDirectionWithHysteresis;
+
+    expect(motorDirectionWithHysteresis(205, 480, MotorDirection::Stop) ==
+               MotorDirection::Stop,
+           "отклонение 35 px не запускает остановленный мотор");
+    expect(motorDirectionWithHysteresis(200, 480, MotorDirection::Stop) ==
+               MotorDirection::Up,
+           "отклонение 40 px запускает мотор вверх");
+    expect(motorDirectionWithHysteresis(215, 480, MotorDirection::Up) ==
+               MotorDirection::Up,
+           "мотор вверх продолжает движение при отклонении 25 px");
+    expect(motorDirectionWithHysteresis(221, 480, MotorDirection::Up) ==
+               MotorDirection::Stop,
+           "мотор останавливается внутри полосы 20 px");
+    expect(motorDirectionWithHysteresis(280, 480, MotorDirection::Up) ==
+               MotorDirection::Stop,
+           "перед реверсом оба реле выключаются");
+    expect(motorDirectionWithHysteresis(280, 480, MotorDirection::Stop) ==
+               MotorDirection::Down,
+           "после остановки начинается движение вниз");
+}
+
 void testCalibrationInterpolation()
 {
     using facetracker::CalibrationPoint;
@@ -136,7 +161,7 @@ void testContinuousMotorGuard()
     using facetracker::MotorRunGuard;
     using namespace std::chrono;
 
-    MotorRunGuard guard(milliseconds(1000));
+    MotorRunGuard guard(milliseconds(1000), milliseconds(200));
     const auto start = MotorRunGuard::Clock::time_point{};
 
     expect(guard.update(MotorDirection::Up, true, true, start) == MotorDirection::Up,
@@ -147,7 +172,13 @@ void testContinuousMotorGuard()
     expect(guard.update(MotorDirection::Down, true, true, start + milliseconds(600)) ==
                MotorDirection::Down,
            "направление меняется после перехода лица через центр");
-    expect(guard.update(MotorDirection::Down, false, true, start + milliseconds(700)) ==
+    expect(guard.update(MotorDirection::Stop, true, false,
+                        start + milliseconds(700)) == MotorDirection::Down,
+           "короткий пропуск распознавания не выключает реле");
+    expect(guard.update(MotorDirection::Stop, true, false,
+                        start + milliseconds(801)) == MotorDirection::Stop,
+           "длительная потеря лица выключает реле");
+    expect(guard.update(MotorDirection::Down, false, true, start + milliseconds(900)) ==
                MotorDirection::Stop,
            "при устаревшем кадре мотор останавливается");
     expect(guard.update(MotorDirection::Down, true, true, start + milliseconds(1000)) ==
@@ -176,6 +207,17 @@ void testContinuousMotorGuard()
         rejected = true;
     }
     expect(rejected, "нулевой предел непрерывной работы отклоняется");
+
+    rejected = false;
+    try
+    {
+        MotorRunGuard invalid(milliseconds(1000), milliseconds(-1));
+    }
+    catch (const std::invalid_argument&)
+    {
+        rejected = true;
+    }
+    expect(rejected, "отрицательное время ожидания лица отклоняется");
 }
 
 } // namespace
@@ -183,6 +225,7 @@ void testContinuousMotorGuard()
 int main()
 {
     testMotorDirection();
+    testMotorHysteresis();
     testCalibrationInterpolation();
     testPulseLimiter();
     testContinuousMotorGuard();

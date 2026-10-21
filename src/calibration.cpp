@@ -12,6 +12,8 @@
 #define SERVO_X 17
 #define SERVO_Y 27
 
+constexpr double CAMERA_FPS = 60.0;
+
 #ifndef CALIBRATION_FILE
 #define CALIBRATION_FILE "data/fixed_to_servo.txt"
 #endif
@@ -120,18 +122,23 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    cap.set(cv::CAP_PROP_FOURCC,
+            cv::VideoWriter::fourcc('M', 'J', 'P', 'G'));
     cap.set(cv::CAP_PROP_FRAME_WIDTH, 640);
     cap.set(cv::CAP_PROP_FRAME_HEIGHT, 480);
-    cap.set(cv::CAP_PROP_FPS, 30);
+    cap.set(cv::CAP_PROP_FPS, CAMERA_FPS);
     cap.set(cv::CAP_PROP_BUFFERSIZE, 1);
-    // This camera supports MJPEG at 640x480/15 fps on the Raspberry Pi.
-    // Request it before the resolution to avoid a bandwidth-heavy raw stream.
+    // MJPEG снижает нагрузку на USB при работе двух камер.
     movingCap.set(cv::CAP_PROP_FOURCC,
                   cv::VideoWriter::fourcc('M', 'J', 'P', 'G'));
     movingCap.set(cv::CAP_PROP_FRAME_WIDTH, 640);
     movingCap.set(cv::CAP_PROP_FRAME_HEIGHT, 480);
-    movingCap.set(cv::CAP_PROP_FPS, 15);
+    movingCap.set(cv::CAP_PROP_FPS, CAMERA_FPS);
     movingCap.set(cv::CAP_PROP_BUFFERSIZE, 1);
+    std::cout << "Fixed camera requested FPS: " << CAMERA_FPS
+              << ", driver reports: " << cap.get(cv::CAP_PROP_FPS) << '\n';
+    std::cout << "Moving camera requested FPS: " << CAMERA_FPS
+              << ", driver reports: " << movingCap.get(cv::CAP_PROP_FPS) << '\n';
 
     // ==========================
     // START POSITIONS

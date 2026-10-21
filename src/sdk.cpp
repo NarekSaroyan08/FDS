@@ -19,26 +19,57 @@ MotorDirection motorDirectionForFace(int faceY, int frameHeight,
     return errorY < 0 ? MotorDirection::Up : MotorDirection::Down;
 }
 
-MotorRunGuard::MotorRunGuard(std::chrono::milliseconds maximumRun)
-    : maximumRun_(maximumRun)
+MotorDirection motorDirectionWithHysteresis(
+    int faceY, int frameHeight, MotorDirection previous,
+    int startDeadbandPixels, int stopDeadbandPixels) noexcept
 {
-    if (maximumRun.count() <= 0)
+    if (frameHeight <= 0 || startDeadbandPixels < stopDeadbandPixels ||
+        stopDeadbandPixels < 0)
+        return MotorDirection::Stop;
+
+    const int deadband = previous == MotorDirection::Stop
+                             ? startDeadbandPixels : stopDeadbandPixels;
+    const auto next = motorDirectionForFace(faceY, frameHeight, deadband);
+    if (previous != MotorDirection::Stop && next != previous)
+        return MotorDirection::Stop;
+    return next;
+}
+
+MotorRunGuard::MotorRunGuard(std::chrono::milliseconds maximumRun,
+                           std::chrono::milliseconds missingFaceGrace)
+    : maximumRun_(maximumRun), missingFaceGrace_(missingFaceGrace)
+{
+    if (maximumRun.count() <= 0 || missingFaceGrace.count() < 0)
         throw std::invalid_argument("Некорректный предел непрерывной работы мотора");
 }
 
 MotorDirection MotorRunGuard::update(MotorDirection requested, bool frameFresh,
                                     bool faceVisible, Clock::time_point now) noexcept
 {
-    if (requested == MotorDirection::Stop)
+    if (!frameFresh)
+        return MotorDirection::Stop;
+    if (faceVisible && requested == MotorDirection::Stop)
     {
-        if (frameFresh && faceVisible)
-        {
-            runStartedAt_ = Clock::time_point::min();
-            limitReached_ = false;
-        }
+        runStartedAt_ = Clock::time_point::min();
+        lastDirection_ = MotorDirection::Stop;
+        limitReached_ = false;
         return MotorDirection::Stop;
     }
-    if (!frameFresh || !faceVisible || limitReached_)
+    if (faceVisible)
+    {
+        lastFaceSeenAt_ = now;
+        lastDirection_ = requested;
+    }
+    else if (lastDirection_ != MotorDirection::Stop &&
+             lastFaceSeenAt_ != Clock::time_point::min() &&
+             now - lastFaceSeenAt_ <= missingFaceGrace_)
+    {
+        requested = lastDirection_;
+    }
+    else
+        return MotorDirection::Stop;
+
+    if (limitReached_)
         return MotorDirection::Stop;
     if (runStartedAt_ == Clock::time_point::min())
         runStartedAt_ = now;

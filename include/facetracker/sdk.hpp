@@ -23,6 +23,9 @@ enum class MotorDirection { Stop, Up, Down };
 // Начало координат кадра находится в левом верхнем углу.
 MotorDirection motorDirectionForFace(int faceY, int frameHeight,
                                     int deadbandPixels = 30) noexcept;
+MotorDirection motorDirectionWithHysteresis(
+    int faceY, int frameHeight, MotorDirection previous,
+    int startDeadbandPixels = 40, int stopDeadbandPixels = 20) noexcept;
 
 // Непрерывное движение, пока кадры свежие; после лимита нужно снова увидеть центр.
 class MotorRunGuard {
@@ -30,7 +33,9 @@ public:
     using Clock = std::chrono::steady_clock;
 
     explicit MotorRunGuard(std::chrono::milliseconds maximumRun =
-                              std::chrono::seconds(5));
+                              std::chrono::seconds(5),
+                           std::chrono::milliseconds missingFaceGrace =
+                              std::chrono::milliseconds(600));
 
     MotorDirection update(MotorDirection requested, bool frameFresh,
                           bool faceVisible, Clock::time_point now) noexcept;
@@ -38,7 +43,10 @@ public:
 
 private:
     std::chrono::milliseconds maximumRun_;
+    std::chrono::milliseconds missingFaceGrace_;
     Clock::time_point runStartedAt_ = Clock::time_point::min();
+    Clock::time_point lastFaceSeenAt_ = Clock::time_point::min();
+    MotorDirection lastDirection_ = MotorDirection::Stop;
     bool limitReached_ = false;
 };
 
