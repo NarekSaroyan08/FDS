@@ -20,14 +20,26 @@
 #define MOTOR_DOWN_PIN 13
 #define MOTOR_UP_PIN 5
 
-constexpr auto MOTOR_FRAME_TIMEOUT = std::chrono::milliseconds(500);
-constexpr auto MOTOR_FACE_GRACE = std::chrono::milliseconds(600);
+constexpr auto MOTOR_FRAME_TIMEOUT = std::chrono::milliseconds(1500);
+constexpr auto MOTOR_FACE_GRACE = std::chrono::milliseconds(1500);
+constexpr auto MOTOR_START_DELAY = std::chrono::milliseconds(300);
 constexpr int MOTOR_START_DEADBAND = 40;
 constexpr int MOTOR_STOP_DEADBAND = 20;
 constexpr double CAMERA_FPS = 60.0;
 
 using facetracker::MotorDirection;
 enum class MotorTarget { NoFace, Centered, Up, Down };
+
+const char *motorDirectionLabel(MotorDirection direction)
+{
+    switch (direction)
+    {
+    case MotorDirection::Up: return "UP";
+    case MotorDirection::Down: return "DOWN";
+    case MotorDirection::Stop: return "STOP";
+    }
+    return "STOP";
+}
 
 bool stopMotor(unsigned inactiveLevel)
 {
@@ -80,6 +92,7 @@ std::vector<facetracker::CalibrationPoint> LUT;
 std::atomic<bool> running(true);
 std::atomic<bool> faceDetected(false);
 std::atomic<MotorTarget> motorTarget(MotorTarget::NoFace);
+std::atomic<MotorDirection> appliedMotorDirection(MotorDirection::Stop);
 std::atomic<std::int64_t> lastMotorFrameMs(-1);
 std::atomic<bool> motorRunLimitReached(false);
 volatile std::sig_atomic_t shutdownRequested = 0;
@@ -437,6 +450,11 @@ int main(int argc, char *argv[])
             cv::putText(frame, "Motor: " + motorPreview + " (" + motorState + ")",
                         {10, 30}, cv::FONT_HERSHEY_SIMPLEX, 0.55,
                         {0, 0, 255}, 2);
+            cv::putText(frame,
+                        std::string("Relay output: ") +
+                            motorDirectionLabel(appliedMotorDirection.load()),
+                        {10, 55}, cv::FONT_HERSHEY_SIMPLEX, 0.55,
+                        {0, 0, 255}, 2);
 
             // SHOW WINDOW
             cv::imshow(
@@ -516,7 +534,7 @@ int main(int argc, char *argv[])
             return;
 
         facetracker::MotorRunGuard guard(std::chrono::seconds(5),
-                                        MOTOR_FACE_GRACE);
+                                        MOTOR_FACE_GRACE, MOTOR_START_DELAY);
         MotorDirection applied = MotorDirection::Stop;
         while (running && !shutdownRequested)
         {
@@ -543,11 +561,22 @@ int main(int argc, char *argv[])
                     break;
                 }
                 applied = next;
+                appliedMotorDirection = next;
+                const char *reason = next != MotorDirection::Stop ? "face target" :
+                                     !frameFresh ? "camera frame timeout" :
+                                     guard.limitReached() ? "run limit" :
+                                     target == MotorTarget::NoFace ? "face lost" :
+                                     target == MotorTarget::Centered ? "face centered" :
+                                     "waiting for stable direction";
+                std::cout << "Motor relay: " << motorDirectionLabel(next)
+                          << " (" << reason << ", frame age " << age
+                          << " ms)\n";
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
         }
         if (!stopMotor(1 - motorActiveLevel))
             std::cerr << "Motor relay GPIO stop failed; disconnect motor power\n";
+        appliedMotorDirection = MotorDirection::Stop;
     });
 
     // ==========================

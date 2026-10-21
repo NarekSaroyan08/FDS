@@ -36,10 +36,13 @@ MotorDirection motorDirectionWithHysteresis(
 }
 
 MotorRunGuard::MotorRunGuard(std::chrono::milliseconds maximumRun,
-                           std::chrono::milliseconds missingFaceGrace)
-    : maximumRun_(maximumRun), missingFaceGrace_(missingFaceGrace)
+                           std::chrono::milliseconds missingFaceGrace,
+                           std::chrono::milliseconds startDelay)
+    : maximumRun_(maximumRun), missingFaceGrace_(missingFaceGrace),
+      startDelay_(startDelay)
 {
-    if (maximumRun.count() <= 0 || missingFaceGrace.count() < 0)
+    if (maximumRun.count() <= 0 || missingFaceGrace.count() < 0 ||
+        startDelay.count() < 0)
         throw std::invalid_argument("Некорректный предел непрерывной работы мотора");
 }
 
@@ -47,11 +50,17 @@ MotorDirection MotorRunGuard::update(MotorDirection requested, bool frameFresh,
                                     bool faceVisible, Clock::time_point now) noexcept
 {
     if (!frameFresh)
+    {
+        activeDirection_ = MotorDirection::Stop;
+        pendingDirection_ = MotorDirection::Stop;
         return MotorDirection::Stop;
+    }
     if (faceVisible && requested == MotorDirection::Stop)
     {
         runStartedAt_ = Clock::time_point::min();
         lastDirection_ = MotorDirection::Stop;
+        activeDirection_ = MotorDirection::Stop;
+        pendingDirection_ = MotorDirection::Stop;
         limitReached_ = false;
         return MotorDirection::Stop;
     }
@@ -67,18 +76,38 @@ MotorDirection MotorRunGuard::update(MotorDirection requested, bool frameFresh,
         requested = lastDirection_;
     }
     else
+    {
+        activeDirection_ = MotorDirection::Stop;
+        pendingDirection_ = MotorDirection::Stop;
         return MotorDirection::Stop;
+    }
 
     if (limitReached_)
         return MotorDirection::Stop;
-    if (runStartedAt_ == Clock::time_point::min())
-        runStartedAt_ = now;
-    if (now - runStartedAt_ >= maximumRun_)
+    if (runStartedAt_ != Clock::time_point::min() &&
+        now - runStartedAt_ >= maximumRun_)
     {
         limitReached_ = true;
+        activeDirection_ = MotorDirection::Stop;
+        pendingDirection_ = MotorDirection::Stop;
         return MotorDirection::Stop;
     }
-    return requested;
+    if (requested == activeDirection_)
+        return activeDirection_;
+    if (requested != pendingDirection_)
+    {
+        pendingDirection_ = requested;
+        pendingSince_ = now;
+    }
+    activeDirection_ = MotorDirection::Stop;
+    if (now - pendingSince_ < startDelay_)
+        return MotorDirection::Stop;
+
+    activeDirection_ = requested;
+    pendingDirection_ = MotorDirection::Stop;
+    if (runStartedAt_ == Clock::time_point::min())
+        runStartedAt_ = now;
+    return activeDirection_;
 }
 
 bool MotorRunGuard::limitReached() const noexcept

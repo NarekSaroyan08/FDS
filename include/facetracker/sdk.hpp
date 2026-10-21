@@ -35,7 +35,9 @@ public:
     explicit MotorRunGuard(std::chrono::milliseconds maximumRun =
                               std::chrono::seconds(5),
                            std::chrono::milliseconds missingFaceGrace =
-                              std::chrono::milliseconds(600));
+                              std::chrono::milliseconds(1500),
+                           std::chrono::milliseconds startDelay =
+                              std::chrono::milliseconds(0));
 
     MotorDirection update(MotorDirection requested, bool frameFresh,
                           bool faceVisible, Clock::time_point now) noexcept;
@@ -44,9 +46,13 @@ public:
 private:
     std::chrono::milliseconds maximumRun_;
     std::chrono::milliseconds missingFaceGrace_;
+    std::chrono::milliseconds startDelay_;
     Clock::time_point runStartedAt_ = Clock::time_point::min();
     Clock::time_point lastFaceSeenAt_ = Clock::time_point::min();
+    Clock::time_point pendingSince_ = Clock::time_point::min();
     MotorDirection lastDirection_ = MotorDirection::Stop;
+    MotorDirection activeDirection_ = MotorDirection::Stop;
+    MotorDirection pendingDirection_ = MotorDirection::Stop;
     bool limitReached_ = false;
 };
 

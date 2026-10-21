@@ -218,6 +218,52 @@ void testContinuousMotorGuard()
         rejected = true;
     }
     expect(rejected, "отрицательное время ожидания лица отклоняется");
+
+    rejected = false;
+    try
+    {
+        MotorRunGuard invalid(milliseconds(1000), milliseconds(200),
+                              milliseconds(-1));
+    }
+    catch (const std::invalid_argument&)
+    {
+        rejected = true;
+    }
+    expect(rejected, "отрицательная задержка включения отклоняется");
+}
+
+void testRelayStartDebounce()
+{
+    using facetracker::MotorDirection;
+    using facetracker::MotorRunGuard;
+    using namespace std::chrono;
+
+    MotorRunGuard guard(seconds(2), milliseconds(1500), milliseconds(300));
+    const auto start = MotorRunGuard::Clock::time_point{};
+    expect(guard.update(MotorDirection::Up, true, true, start) ==
+               MotorDirection::Stop,
+           "первый кадр вне центра не включает реле");
+    expect(guard.update(MotorDirection::Up, true, true, start + milliseconds(200)) ==
+               MotorDirection::Stop,
+           "реле ожидает устойчивого направления");
+    expect(guard.update(MotorDirection::Stop, true, true,
+                        start + milliseconds(250)) == MotorDirection::Stop,
+           "краткий выход лица из центра не даёт импульс");
+    expect(guard.update(MotorDirection::Up, true, true,
+                        start + milliseconds(300)) == MotorDirection::Stop,
+           "после возврата в центр отсчёт начинается заново");
+    expect(guard.update(MotorDirection::Up, true, true,
+                        start + milliseconds(600)) == MotorDirection::Up,
+           "устойчивое направление включает реле непрерывно");
+    expect(guard.update(MotorDirection::Stop, true, false,
+                        start + milliseconds(800)) == MotorDirection::Up,
+           "один пропуск распознавания не создаёт новый импульс");
+    expect(guard.update(MotorDirection::Down, true, true,
+                        start + milliseconds(900)) == MotorDirection::Stop,
+           "реверс сначала выключает оба реле");
+    expect(guard.update(MotorDirection::Down, true, true,
+                        start + milliseconds(1200)) == MotorDirection::Down,
+           "после выдержки можно включить обратное направление");
 }
 
 } // namespace
@@ -229,6 +275,7 @@ int main()
     testCalibrationInterpolation();
     testPulseLimiter();
     testContinuousMotorGuard();
+    testRelayStartDebounce();
 
     if (failures != 0)
     {
