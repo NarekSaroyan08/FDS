@@ -16,6 +16,7 @@ TARGETS := $(BUILD_DIR)/facetracking $(BUILD_DIR)/calibration
 SDK_OBJ := $(BUILD_DIR)/sdk.o
 SDK_LIB := $(BUILD_DIR)/libfacetracker_sdk.a
 TEST_BIN := $(BUILD_DIR)/sdk_tests
+SCENARIO_TEST_BIN := $(BUILD_DIR)/tracking_scenarios
 
 .PHONY: all clean run calibrate test
 
@@ -36,8 +37,12 @@ $(BUILD_DIR)/calibration: $(SRC_DIR)/calibration.cpp include/facetracker/sdk.hpp
 $(TEST_BIN): tests/sdk_tests.cpp include/facetracker/sdk.hpp $(SDK_LIB) | $(BUILD_DIR)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -o $@ $< $(SDK_LIB)
 
-test: $(TEST_BIN)
+$(SCENARIO_TEST_BIN): tests/tracking_scenarios.cpp include/facetracker/sdk.hpp $(SDK_LIB) | $(BUILD_DIR)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -o $@ $< $(SDK_LIB)
+
+test: $(TEST_BIN) $(SCENARIO_TEST_BIN)
 	./$(TEST_BIN)
+	./$(SCENARIO_TEST_BIN)
 
 $(BUILD_DIR):
 	mkdir -p $@
@@ -50,4 +55,4 @@ calibrate: $(BUILD_DIR)/calibration
 	sudo ./$(BUILD_DIR)/calibration
 
 clean:
-	rm -f $(TARGETS) $(TEST_BIN) $(SDK_OBJ) $(SDK_LIB)
+	rm -f $(TARGETS) $(TEST_BIN) $(SCENARIO_TEST_BIN) $(SDK_OBJ) $(SDK_LIB)
