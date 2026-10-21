@@ -130,6 +130,54 @@ void testPulseLimiter()
     expect(rejected, "отрицательная пауза отклоняется");
 }
 
+void testContinuousMotorGuard()
+{
+    using facetracker::MotorDirection;
+    using facetracker::MotorRunGuard;
+    using namespace std::chrono;
+
+    MotorRunGuard guard(milliseconds(1000));
+    const auto start = MotorRunGuard::Clock::time_point{};
+
+    expect(guard.update(MotorDirection::Up, true, true, start) == MotorDirection::Up,
+           "движение вверх удерживается без импульсов");
+    expect(guard.update(MotorDirection::Up, true, true, start + milliseconds(400)) ==
+               MotorDirection::Up,
+           "движение вверх продолжается при новых кадрах");
+    expect(guard.update(MotorDirection::Down, true, true, start + milliseconds(600)) ==
+               MotorDirection::Down,
+           "направление меняется после перехода лица через центр");
+    expect(guard.update(MotorDirection::Down, false, true, start + milliseconds(700)) ==
+               MotorDirection::Stop,
+           "при устаревшем кадре мотор останавливается");
+    expect(guard.update(MotorDirection::Down, true, true, start + milliseconds(1000)) ==
+               MotorDirection::Stop && guard.limitReached(),
+           "по лимиту непрерывной работы мотор останавливается");
+    expect(guard.update(MotorDirection::Down, true, true, start + milliseconds(1100)) ==
+               MotorDirection::Stop,
+           "лимит не допускает повторное включение без центра");
+    expect(guard.update(MotorDirection::Stop, true, false, start + milliseconds(1150)) ==
+               MotorDirection::Stop && guard.limitReached(),
+           "потеря лица не снимает лимит");
+    expect(guard.update(MotorDirection::Stop, true, true, start + milliseconds(1200)) ==
+               MotorDirection::Stop && !guard.limitReached(),
+           "появление лица в центре снимает лимит");
+    expect(guard.update(MotorDirection::Down, true, true, start + milliseconds(1300)) ==
+               MotorDirection::Down,
+           "после центра мотор может двигаться вниз");
+
+    bool rejected = false;
+    try
+    {
+        MotorRunGuard invalid(milliseconds(0));
+    }
+    catch (const std::invalid_argument&)
+    {
+        rejected = true;
+    }
+    expect(rejected, "нулевой предел непрерывной работы отклоняется");
+}
+
 } // namespace
 
 int main()
@@ -137,6 +185,7 @@ int main()
     testMotorDirection();
     testCalibrationInterpolation();
     testPulseLimiter();
+    testContinuousMotorGuard();
 
     if (failures != 0)
     {

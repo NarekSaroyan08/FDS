@@ -19,6 +19,42 @@ MotorDirection motorDirectionForFace(int faceY, int frameHeight,
     return errorY < 0 ? MotorDirection::Up : MotorDirection::Down;
 }
 
+MotorRunGuard::MotorRunGuard(std::chrono::milliseconds maximumRun)
+    : maximumRun_(maximumRun)
+{
+    if (maximumRun.count() <= 0)
+        throw std::invalid_argument("Некорректный предел непрерывной работы мотора");
+}
+
+MotorDirection MotorRunGuard::update(MotorDirection requested, bool frameFresh,
+                                    bool faceVisible, Clock::time_point now) noexcept
+{
+    if (requested == MotorDirection::Stop)
+    {
+        if (frameFresh && faceVisible)
+        {
+            runStartedAt_ = Clock::time_point::min();
+            limitReached_ = false;
+        }
+        return MotorDirection::Stop;
+    }
+    if (!frameFresh || !faceVisible || limitReached_)
+        return MotorDirection::Stop;
+    if (runStartedAt_ == Clock::time_point::min())
+        runStartedAt_ = now;
+    if (now - runStartedAt_ >= maximumRun_)
+    {
+        limitReached_ = true;
+        return MotorDirection::Stop;
+    }
+    return requested;
+}
+
+bool MotorRunGuard::limitReached() const noexcept
+{
+    return limitReached_;
+}
+
 ServoAngles servoAnglesForPoint(const std::vector<CalibrationPoint>& points,
                                int x, int y, std::size_t nearestCount)
 {

@@ -24,6 +24,24 @@ enum class MotorDirection { Stop, Up, Down };
 MotorDirection motorDirectionForFace(int faceY, int frameHeight,
                                     int deadbandPixels = 30) noexcept;
 
+// Непрерывное движение, пока кадры свежие; после лимита нужно снова увидеть центр.
+class MotorRunGuard {
+public:
+    using Clock = std::chrono::steady_clock;
+
+    explicit MotorRunGuard(std::chrono::milliseconds maximumRun =
+                              std::chrono::seconds(5));
+
+    MotorDirection update(MotorDirection requested, bool frameFresh,
+                          bool faceVisible, Clock::time_point now) noexcept;
+    bool limitReached() const noexcept;
+
+private:
+    std::chrono::milliseconds maximumRun_;
+    Clock::time_point runStartedAt_ = Clock::time_point::min();
+    bool limitReached_ = false;
+};
+
 // Интерполяция ближайших точек с весом 1 / (расстояние + 1)^2.
 // При пустой таблице или nearestCount == 0 возвращает {90, 90}.
 ServoAngles servoAnglesForPoint(const std::vector<CalibrationPoint>& points,

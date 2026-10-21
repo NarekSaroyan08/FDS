@@ -13,15 +13,17 @@
 #include <string>
 #include <stdexcept>
 #include <csignal>
+#include <cstdint>
 
 #define SERVO_X 17
 #define SERVO_Y 27
 #define MOTOR_DOWN_PIN 13
 #define MOTOR_UP_PIN 5
 
-constexpr unsigned MOTOR_PULSE_US = 120000;
+constexpr auto MOTOR_FRAME_TIMEOUT = std::chrono::milliseconds(500);
 
 using facetracker::MotorDirection;
+enum class MotorTarget { NoFace, Centered, Up, Down };
 
 bool stopMotor(unsigned inactiveLevel)
 {
@@ -30,7 +32,9 @@ bool stopMotor(unsigned inactiveLevel)
     return downResult == 0 && upResult == 0;
 }
 
-bool pulseMotor(MotorDirection direction, unsigned activeLevel)
+bool setMotorDirection(MotorDirection direction, unsigned activeLevel,
+                       const std::atomic<bool> &keepRunning,
+                       volatile std::sig_atomic_t &stopRequested)
 {
     const unsigned inactiveLevel = 1 - activeLevel;
     if (!stopMotor(inactiveLevel))
@@ -38,16 +42,23 @@ bool pulseMotor(MotorDirection direction, unsigned activeLevel)
     if (direction == MotorDirection::Stop)
         return true;
 
-    // Let one relay release before energizing the other.
+    // Сначала отпустить оба реле, затем включить нужное направление.
     gpioDelay(50000);
+    if (!keepRunning || stopRequested)
+        return true;
     if (gpioWrite(direction == MotorDirection::Up ? MOTOR_UP_PIN : MOTOR_DOWN_PIN,
                   activeLevel) != 0)
     {
         stopMotor(inactiveLevel);
         return false;
     }
-    gpioDelay(MOTOR_PULSE_US);
-    return stopMotor(inactiveLevel);
+    return true;
+}
+
+std::int64_t steadyClockMilliseconds()
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
 #ifndef CALIBRATION_FILE
@@ -64,6 +75,9 @@ std::vector<facetracker::CalibrationPoint> LUT;
 // GLOBAL FLAGS
 std::atomic<bool> running(true);
 std::atomic<bool> faceDetected(false);
+std::atomic<MotorTarget> motorTarget(MotorTarget::NoFace);
+std::atomic<std::int64_t> lastMotorFrameMs(-1);
+std::atomic<bool> motorRunLimitReached(false);
 volatile std::sig_atomic_t shutdownRequested = 0;
 
 void handleSignal(int)
@@ -267,17 +281,8 @@ int main(int argc, char *argv[])
     {
         int lastFx = 320;
         int lastFy = 240;
-        facetracker::PulseLimiter motorLimiter;
-
         while (running && !shutdownRequested)
         {
-            if (motorEnabled && !stopMotor(1 - motorActiveLevel))
-            {
-                std::cerr << "Cannot stop motor relay; disconnect motor power\n";
-                running = false;
-                break;
-            }
-
             cv::Mat frame;
 
             if (!cap.read(frame))
@@ -366,19 +371,6 @@ int main(int argc, char *argv[])
                 servoX = target.x;
                 servoY = target.y;
 
-                if (motorEnabled && motorLimiter.canPulse(
-                        motorDirection, facetracker::PulseLimiter::Clock::now()))
-                {
-                    if (!pulseMotor(motorDirection, motorActiveLevel))
-                    {
-                        std::cerr << "Motor relay GPIO failed; disconnect motor power\n";
-                        running = false;
-                        break;
-                    }
-                    motorLimiter.recordCompletedPulse(
-                        facetracker::PulseLimiter::Clock::now());
-                }
-
                 // ==========================
                 // DRAW
                 cv::circle(
@@ -411,12 +403,18 @@ int main(int argc, char *argv[])
 
             }
 
+            motorTarget = faces.empty() ? MotorTarget::NoFace :
+                          motorDirection == MotorDirection::Up ? MotorTarget::Up :
+                          motorDirection == MotorDirection::Down ? MotorTarget::Down :
+                          MotorTarget::Centered;
+            lastMotorFrameMs = steadyClockMilliseconds();
+
             // ==========================
             // Show the direction and whether relay output is enabled.
             cv::line(frame, {0, frame.rows / 2},
                      {frame.cols - 1, frame.rows / 2}, {0, 255, 255}, 1);
             const std::string motorState = !motorEnabled ? "relay disabled" :
-                                           motorLimiter.limitReached() ? "pulse limit" :
+                                           motorRunLimitReached ? "run limit" :
                                            "relay enabled";
             cv::putText(frame, "Motor: " + motorPreview + " (" + motorState + ")",
                         {10, 30}, cv::FONT_HERSHEY_SIMPLEX, 0.55,
@@ -493,10 +491,51 @@ int main(int argc, char *argv[])
         }
     });
 
+    // Реле удерживается включённым, пока лицо вне центра и поступают кадры.
+    std::thread motorThread([&]()
+    {
+        if (!motorEnabled)
+            return;
+
+        facetracker::MotorRunGuard guard;
+        MotorDirection applied = MotorDirection::Stop;
+        while (running && !shutdownRequested)
+        {
+            const auto now = facetracker::MotorRunGuard::Clock::now();
+            const auto frameTime = lastMotorFrameMs.load();
+            const auto age = steadyClockMilliseconds() - frameTime;
+            const bool frameFresh = frameTime >= 0 && age >= 0 &&
+                                    age <= MOTOR_FRAME_TIMEOUT.count();
+            const auto target = motorTarget.load();
+            const auto requested = target == MotorTarget::Up ? MotorDirection::Up :
+                                   target == MotorTarget::Down ? MotorDirection::Down :
+                                   MotorDirection::Stop;
+            const auto next = guard.update(requested, frameFresh,
+                                           target != MotorTarget::NoFace, now);
+            motorRunLimitReached = guard.limitReached();
+
+            if (next != applied)
+            {
+                if (!setMotorDirection(next, motorActiveLevel,
+                                       running, shutdownRequested))
+                {
+                    std::cerr << "Motor relay GPIO failed; disconnect motor power\n";
+                    running = false;
+                    break;
+                }
+                applied = next;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        if (!stopMotor(1 - motorActiveLevel))
+            std::cerr << "Motor relay GPIO stop failed; disconnect motor power\n";
+    });
+
     // ==========================
     // WAIT
     visionThread.join();
     servoThread.join();
+    motorThread.join();
 
     // ==========================
     // STOP EVERYTHING
