@@ -14,6 +14,7 @@
 #include <stdexcept>
 #include <csignal>
 #include <cstdint>
+#include <cstdlib>
 
 #define SERVO_X 17
 #define SERVO_Y 27
@@ -164,6 +165,10 @@ int main(int argc, char *argv[])
     bool cameraProvided = false;
     bool relayPolarityProvided = false;
     unsigned motorActiveLevel = 1;
+    const char *display = std::getenv("DISPLAY");
+    const char *waylandDisplay = std::getenv("WAYLAND_DISPLAY");
+    bool headless = (!display || !*display) &&
+                    (!waylandDisplay || !*waylandDisplay);
     try
     {
         for (int i = 1; i < argc; ++i)
@@ -171,6 +176,8 @@ int main(int argc, char *argv[])
             const std::string arg = argv[i];
             if (arg == "--enable-motor")
                 motorEnabled = true;
+            else if (arg == "--headless")
+                headless = true;
             else if (arg == "--relay-active-low" && !relayPolarityProvided)
             {
                 motorActiveLevel = 0;
@@ -200,7 +207,8 @@ int main(int argc, char *argv[])
     catch (const std::exception &)
     {
         std::cerr << "Usage: facetracking [fixed_camera_device] "
-                     "[--enable-motor [--relay-active-high|--relay-active-low]]\n";
+                     "[--enable-motor [--relay-active-high|--relay-active-low]] "
+                     "[--headless]\n";
         return 1;
     }
 
@@ -218,6 +226,7 @@ int main(int argc, char *argv[])
     }
     std::signal(SIGINT, handleSignal);
     std::signal(SIGTERM, handleSignal);
+    std::signal(SIGHUP, handleSignal);
 
     // ==========================
     // SAFE PWM FREQUENCY
@@ -397,13 +406,8 @@ int main(int argc, char *argv[])
 
                 // ==========================
                 // DRAW
-                cv::circle(
-                    frame,
-                    {fx, fy},
-                    5,
-                    {0,255,0},
-                    -1
-                );
+                if (!headless)
+                    cv::circle(frame, {fx, fy}, 5, {0, 255, 0}, -1);
             }
             else
             {
@@ -434,33 +438,26 @@ int main(int argc, char *argv[])
             lastMotorFrameMs = steadyClockMilliseconds();
 
             // ==========================
-            // Show the direction and whether relay output is enabled.
-            cv::line(frame, {0, frame.rows / 2},
-                     {frame.cols - 1, frame.rows / 2}, {0, 255, 255}, 1);
-            const std::string motorState = !motorEnabled ? "relay disabled" :
-                                           motorRunLimitReached ? "run limit" :
-                                           "relay enabled";
-            cv::putText(frame, "Motor: " + motorPreview + " (" + motorState + ")",
-                        {10, 30}, cv::FONT_HERSHEY_SIMPLEX, 0.55,
-                        {0, 0, 255}, 2);
-            cv::putText(frame,
-                        std::string("Relay output: ") +
-                            motorDirectionLabel(appliedMotorDirection.load()),
-                        {10, 55}, cv::FONT_HERSHEY_SIMPLEX, 0.55,
-                        {0, 0, 255}, 2);
-
-            // SHOW WINDOW
-            cv::imshow(
-                "PRO Tracker",
-                frame
-            );
-
-            char key =
-                cv::waitKey(1);
-
-            if (key == 'q')
+            if (!headless)
             {
-                running = false;
+                // Show the direction and whether relay output is enabled.
+                cv::line(frame, {0, frame.rows / 2},
+                         {frame.cols - 1, frame.rows / 2}, {0, 255, 255}, 1);
+                const std::string motorState = !motorEnabled ? "relay disabled" :
+                                               motorRunLimitReached ? "run limit" :
+                                               "relay enabled";
+                cv::putText(frame, "Motor: " + motorPreview + " (" + motorState + ")",
+                            {10, 30}, cv::FONT_HERSHEY_SIMPLEX, 0.55,
+                            {0, 0, 255}, 2);
+                cv::putText(frame,
+                            std::string("Relay output: ") +
+                                motorDirectionLabel(appliedMotorDirection.load()),
+                            {10, 55}, cv::FONT_HERSHEY_SIMPLEX, 0.55,
+                            {0, 0, 255}, 2);
+
+                cv::imshow("PRO Tracker", frame);
+                if (cv::waitKey(1) == 'q')
+                    running = false;
             }
         }
     });

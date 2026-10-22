@@ -8,6 +8,7 @@ CPPFLAGS += -Iinclude
 OPENCV_CFLAGS = $(shell pkg-config --cflags opencv4)
 OPENCV_LIBS   = $(shell pkg-config --libs opencv4)
 LDLIBS   += -lpigpio -lpthread -lrt
+RUN_FLAGS ?= $(if $(SSH_CONNECTION),--headless,)
 
 SRC_DIR   := src
 BUILD_DIR := build
@@ -49,7 +50,7 @@ $(BUILD_DIR):
 
 # Run from the project root so data/ paths resolve
 run: $(BUILD_DIR)/facetracking
-	sudo ./$(BUILD_DIR)/facetracking /dev/video0 --enable-motor
+	sudo ./$(BUILD_DIR)/facetracking /dev/video0 --enable-motor $(RUN_FLAGS)
 
 calibrate: $(BUILD_DIR)/calibration
 	sudo ./$(BUILD_DIR)/calibration

@@ -144,7 +144,7 @@ g++ -O2 -std=c++17 -Iinclude -o build/facetracking src/facetracking.cpp build/li
 g++ -O2 -std=c++17 -Iinclude -o build/calibration src/calibration.cpp `pkg-config --cflags --libs opencv4` -lpigpio -lpthread -lrt
 ```
 
-Нужен C++17 (`std::clamp`). Обе программы открывают окно OpenCV (`imshow`), поэтому нужен рабочий стол или X-forwarding (`ssh -X`).
+Нужен C++17 (`std::clamp`). Калибровка открывает окно OpenCV, поэтому ей нужен рабочий стол или X-forwarding (`ssh -X`). Трекер при запуске по SSH может работать без окна.
 
 ---
 
@@ -232,10 +232,12 @@ sudo ./build/calibration /dev/video0 /dev/video2 9 6
 ## Запуск трекинга
 
 ```bash
-make run                # = sudo ./build/facetracking /dev/video0 --enable-motor
+make run                # в SSH запускает трекер без окна; на рабочем столе показывает окно
 ```
 
 Если неподвижная камера имеет другой номер, запустите `sudo ./build/facetracking /dev/video2` (число `2` тоже допускается). Для неё с мотором: `sudo ./build/facetracking /dev/video2 --enable-motor`.
+
+В SSH-сессии `make run` передаёт `--headless`, поэтому трекер не вызывает Qt и не требует графического дисплея. Если запускаете бинарник напрямую через SSH, используйте `sudo ./build/facetracking /dev/video0 --enable-motor --headless`. При отсутствии `DISPLAY` и `WAYLAND_DISPLAY` режим без окна также включается автоматически. Для остановки в терминале нажмите `Ctrl+C`; после этого программа отключает сервоприводы и переводит реле в неактивное состояние.
 
 Если ваш релейный модуль включается уровнем `LOW`, используйте `sudo ./build/facetracking /dev/video0 --enable-motor --relay-active-low`. Не выбирайте полярность методом проб с подключённым мотором.
 
@@ -337,7 +339,7 @@ make run                # = sudo ./build/facetracking /dev/video0 --enable-motor
 | `Cannot open ... camera` | Проверьте пути устройств через `v4l2-ctl --list-devices` и передайте их явно. Калибровке нужны два доступных узла видеозахвата; слежению — только неподвижная камера. Для CSI-камеры сначала проверьте `rpicam-hello --list-cameras`: её наличие там не гарантирует возможность открыть тот же номер как V4L2-видеозахват. |
 | `Cascade load failed` | Нет `data/haarcascade_frontalface_default.xml` или запуск не из корня проекта. |
 | `No fixed_to_servo.txt found` / LUT пуст | Не выполнена новая калибровка `data/fixed_to_servo.txt`: трекер не запустится, сначала выполните `make calibrate`. |
-| Окно не открывается (`cannot open display`) | Запустите на рабочем столе Pi или через `ssh -X`. |
+| Qt сообщает `cannot open display` при `make run` | Обновите код и пересоберите его: `git pull origin main && make run`. В SSH трекер работает без окна. Калибровке для окна нужен рабочий стол Pi или `ssh -X`. |
 | Серво дёргаются / Pi перезагружается | Сервоприводы питаются от 5 В Pi. Нужен отдельный источник и общая земля. |
 | Подвес «уходит» в сторону | Мало точек калибровки в этой зоне кадра: добавьте их. |
 
